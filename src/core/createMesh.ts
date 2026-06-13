@@ -3,7 +3,9 @@ import {
   ComputedError,
   DuplicateRegistrationError,
   FormError,
+  MutationError,
   PersistenceError,
+  ResourceError,
   SelectorError,
   StateMeshError,
   TransactionError,
@@ -15,10 +17,16 @@ import { createBatcher, cloneState, debounce, getPath, isBrowser, pickPaths, set
 import type { EqualityFn } from "../utils";
 import type {
   ComputedDefinition,
+  EntityCollection,
+  EntityIdSelector,
   FormApi,
+  FormAutosaveOptions,
   FormDefinition,
+  FormDirtyFields,
   FormErrors,
+  FormFieldArrayApi,
   FormState,
+  FormValidatingFields,
   Mesh,
   MeshAction,
   MeshActionContext,
@@ -32,7 +40,26 @@ import type {
   MeshSetStateInput,
   MeshSetStateOptions,
   MeshSubscriptionOptions,
+  MutationContext,
+  MutationDefinition,
+  MutationHandle,
+  MutationStatus,
+  QueuedMutation,
   PersistOptions,
+  ResourceDehydrateOptions,
+  ResourceDefinition,
+  ResourceFetchContext,
+  ResourceFetchOptions,
+  ResourceHandle,
+  ResourceHydrateOptions,
+  ResourceInvalidation,
+  ResourcePersistOptions,
+  ResourceSetDataOptions,
+  ResourceSnapshot,
+  ResourceSnapshotEntry,
+  ResourceStatus,
+  ResourceSubscribeOptions,
+  ResourceTag,
   Snapshot,
   TransactionContext,
   TransactionDefinition,
@@ -70,6 +97,40 @@ type TransactionRuntime = {
   queue: Promise<unknown>;
 };
 
+type ResourceEntry = {
+  name: string;
+  key: string;
+  params: unknown;
+  status: "idle" | "loading" | "success" | "error";
+  pending: boolean;
+  fetching: boolean;
+  stale: boolean;
+  data: unknown;
+  error: Error | null;
+  tags: string[];
+  pages: unknown[];
+  pageParams: unknown[];
+  startedAt: number | null;
+  finishedAt: number | null;
+  duration: number | null;
+  updatedAt: number | null;
+  controller: AbortController | null;
+  inFlight: Promise<unknown> | null;
+  gcTimer: ReturnType<typeof setTimeout> | null;
+};
+
+type MutationRuntime = {
+  controller: AbortController | null;
+  inFlight: Promise<unknown> | null;
+  queue: Promise<unknown>;
+  lastPayload: unknown;
+};
+
+type QueuedMutationEntry = QueuedMutation & {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+};
+
 type UrlStateEntry<TValues extends Record<string, unknown>> = {
   defaults: TValues;
   values: TValues;
@@ -84,6 +145,9 @@ type FormEntry<TValues extends Record<string, unknown>> = {
   initialValues: TValues;
   state: FormState<TValues>;
   listeners: Set<() => void>;
+  validationRun: symbol | null;
+  fieldValidationRuns: Map<string, symbol>;
+  autosave: { (): void; cancel: () => void } | null;
 };
 
 const DEFAULT_TRANSACTION_STATUS: TransactionStatus = {
@@ -96,6 +160,21 @@ const DEFAULT_TRANSACTION_STATUS: TransactionStatus = {
   finishedAt: null,
   duration: null,
   attempts: 0
+};
+
+const DEFAULT_MUTATION_STATUS: MutationStatus = {
+  status: "idle",
+  pending: false,
+  queued: false,
+  success: false,
+  data: null,
+  error: null,
+  lastPayload: undefined,
+  startedAt: null,
+  finishedAt: null,
+  duration: null,
+  runs: 0,
+  queueSize: 0
 };
 
 let idCounter = 0;
@@ -138,6 +217,15 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   const transactionStatuses = new Map<string, TransactionStatus>();
   const transactionListeners = new Map<string, Set<() => void>>();
   const transactionRuntime = new Map<string, TransactionRuntime>();
+  const resourceDefinitions = new Map<string, ResourceDefinition<TState, unknown, unknown, unknown>>();
+  const resourceEntries = new Map<string, ResourceEntry>();
+  const resourceListeners = new Map<string, Set<() => void>>();
+  const resourceChangeListeners = new Set<() => void>();
+  const mutationDefinitions = new Map<string, MutationDefinition<TState, unknown, unknown>>();
+  const mutationStatuses = new Map<string, MutationStatus>();
+  const mutationListeners = new Map<string, Set<() => void>>();
+  const mutationRuntime = new Map<string, MutationRuntime>();
+  const queuedMutations: QueuedMutationEntry[] = [];
   const urlStates = new Map<string, UrlStateEntry<Record<string, unknown>>>();
   const formEntries = new Map<string, FormEntry<Record<string, unknown>>>();
   const pluginCleanups = new Map<string, Unsubscribe | void>();
@@ -177,6 +265,29 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     cancelTransaction,
     resetTransaction,
     retryTransaction,
+    resource,
+    fetchResource,
+    prefetchResource,
+    fetchNextResourcePage,
+    getResourceStatus,
+    setResourceData,
+    invalidateResources,
+    subscribeResource,
+    dehydrateResources,
+    hydrateResources,
+    persistResources,
+    mutation,
+    runMutation,
+    getMutationStatus,
+    subscribeMutation,
+    resetMutation,
+    getQueuedMutations,
+    runQueuedMutations,
+    clearQueuedMutations,
+    normalizeEntities,
+    mergeEntities,
+    removeEntities,
+    denormalizeEntities,
     computed,
     getComputed,
     subscribeComputed,
@@ -195,6 +306,10 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     onEvent,
     emit
   } satisfies Mesh<TState>;
+
+  if (isBrowser()) {
+    window.addEventListener("online", handleOnline);
+  }
 
   return mesh;
 
@@ -308,12 +423,35 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       runtime.controller?.abort();
     }
     transactionRuntime.clear();
+    resourceDefinitions.clear();
+    for (const entry of resourceEntries.values()) {
+      entry.controller?.abort();
+      if (entry.gcTimer) clearTimeout(entry.gcTimer);
+    }
+    resourceEntries.clear();
+    resourceListeners.clear();
+    resourceChangeListeners.clear();
+    mutationDefinitions.clear();
+    mutationStatuses.clear();
+    mutationListeners.clear();
+    for (const runtime of mutationRuntime.values()) {
+      runtime.controller?.abort();
+    }
+    mutationRuntime.clear();
+    clearQueuedMutations(new MutationError("StateMesh was destroyed before queued mutations could run.", {
+      code: "STATEMESH_MUTATION_QUEUE_CLEARED",
+      metadata: { mesh: name }
+    }));
+    if (isBrowser()) {
+      window.removeEventListener("online", handleOnline);
+    }
     for (const entry of urlStates.values()) {
       entry.cleanup();
       entry.listeners.clear();
     }
     urlStates.clear();
     for (const entry of formEntries.values()) {
+      entry.autosave?.cancel();
       entry.listeners.clear();
     }
     formEntries.clear();
@@ -994,12 +1132,919 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     return runTransaction(transactionName, runtime?.lastPayload) as Promise<TResult>;
   }
 
+  function resource<TParams = void, TData = unknown, TPageParam = unknown>(
+    resourceName: string,
+    definition: ResourceDefinition<TState, TParams, TData, TPageParam>,
+    options: MeshRegistryOptions = {}
+  ): ResourceHandle<TParams, TData> {
+    assertCanRegister(resourceDefinitions, "resource", resourceName, options.replace);
+    resourceDefinitions.set(resourceName, definition as ResourceDefinition<TState, unknown, unknown, unknown>);
+    return createResourceHandle<TParams, TData>(resourceName);
+  }
+
+  function createResourceHandle<TParams, TData>(resourceName: string): ResourceHandle<TParams, TData> {
+    return {
+      resourceName,
+      kind: "statemesh.resource",
+      fetch: (params?: TParams, fetchOptions?: ResourceFetchOptions) =>
+        fetchResource<TParams, TData>(resourceName, params, fetchOptions),
+      preload: (params?: TParams, fetchOptions?: ResourceFetchOptions) =>
+        fetchResource<TParams, TData>(resourceName, params, { ...fetchOptions, force: false }),
+      prefetch: (params?: TParams, fetchOptions?: ResourceFetchOptions) =>
+        prefetchResource<TParams, TData>(resourceName, params, fetchOptions),
+      fetchNextPage: (params?: TParams, fetchOptions?: ResourceFetchOptions) =>
+        fetchNextResourcePage<TParams, TData>(resourceName, params, fetchOptions),
+      get: (params?: TParams) => getResourceStatus<TData, TParams>(resourceName, params),
+      setData: (params, updater, setOptions) => setResourceData<TData, TParams>(resourceName, params, updater, setOptions),
+      invalidate: (invalidation?: ResourceInvalidation) =>
+        invalidateResources(normalizeHandleInvalidation(resourceName, invalidation)),
+      subscribe: (listener, params?: TParams) => subscribeResource(resourceName, listener, { params })
+    };
+  }
+
+  function fetchResource<TParams = void, TData = unknown>(
+    resourceName: string,
+    params?: TParams,
+    fetchOptions: ResourceFetchOptions = {}
+  ): Promise<TData> {
+    return fetchResourceInternal<TParams, TData>(resourceName, params, fetchOptions, false);
+  }
+
+  function prefetchResource<TParams = void, TData = unknown>(
+    resourceName: string,
+    params?: TParams,
+    fetchOptions: ResourceFetchOptions = {}
+  ): Promise<TData> {
+    return fetchResourceInternal<TParams, TData>(resourceName, params, { ...fetchOptions, force: false }, false);
+  }
+
+  function fetchNextResourcePage<TParams = void, TData = unknown>(
+    resourceName: string,
+    params?: TParams,
+    fetchOptions: ResourceFetchOptions = {}
+  ): Promise<TData> {
+    const definition = getResourceDefinition<TParams, TData>(resourceName);
+    const key = getResourceCacheKey(resourceName, definition, params);
+    const entry = ensureResourceEntry(resourceName, key, params, definition);
+    const lastPage = entry.pages.length > 0 ? entry.pages[entry.pages.length - 1] as TData : entry.data as TData | null;
+    const pageParam = fetchOptions.pageParam ?? (
+      lastPage !== null && lastPage !== undefined
+        ? definition.getNextPageParam?.(lastPage, entry.pages as TData[], params as TParams)
+        : undefined
+    );
+
+    if (pageParam === null || pageParam === undefined) {
+      return Promise.reject(new ResourceError(`Resource "${resourceName}" does not have another page.`, {
+        metadata: { resource: resourceName, key }
+      }));
+    }
+
+    return fetchResourceInternal<TParams, TData>(
+      resourceName,
+      params,
+      { ...fetchOptions, pageParam, append: true, force: true },
+      true
+    );
+  }
+
+  function fetchResourceInternal<TParams = void, TData = unknown>(
+    resourceName: string,
+    params: TParams | undefined,
+    fetchOptions: ResourceFetchOptions,
+    append: boolean
+  ): Promise<TData> {
+    assertActive();
+    const definition = getResourceDefinition<TParams, TData>(resourceName);
+    const key = getResourceCacheKey(resourceName, definition, params);
+    const entry = ensureResourceEntry(resourceName, key, params, definition);
+
+    if (!fetchOptions.force && entry.status === "success" && !isResourceEntryStale(entry, definition) && !append) {
+      return Promise.resolve(entry.data as TData);
+    }
+
+    if (definition.dedupe !== false && entry.inFlight && !fetchOptions.force) {
+      return entry.inFlight as Promise<TData>;
+    }
+
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    entry.controller = controller;
+    entry.startedAt = startedAt;
+    entry.error = null;
+    entry.fetching = true;
+    entry.pending = entry.status === "idle" || (!fetchOptions.background && !definition.keepPreviousData && !entry.data);
+    entry.status = entry.pending ? "loading" : entry.status;
+    notifyResourceEntry(entry);
+
+    dispatchEvent({
+      type: "resource.fetch.started",
+      name: resourceName,
+      key,
+      timestamp: startedAt,
+      metadata: { mesh: name, ...fetchOptions.metadata }
+    });
+
+    const pageIndex = append ? entry.pages.length : 0;
+    const context: ResourceFetchContext<TState, TParams, unknown> = {
+      name: resourceName,
+      key,
+      params: params as TParams,
+      signal: controller.signal,
+      mesh,
+      pageParam: fetchOptions.pageParam,
+      pageIndex,
+      metadata: fetchOptions.metadata
+    };
+
+    const promise = Promise.resolve()
+      .then(() => definition.fetch(params as TParams, context))
+      .then((result) => {
+        const finishedAt = Date.now();
+        const nextPages = append ? [...entry.pages, result] : [result];
+        const nextPageParams = append ? [...entry.pageParams, fetchOptions.pageParam] : [fetchOptions.pageParam];
+        const data = append && definition.mergePages
+          ? definition.mergePages(nextPages as TData[], params as TParams)
+          : result;
+
+        entry.status = "success";
+        entry.pending = false;
+        entry.fetching = false;
+        entry.stale = false;
+        entry.data = data;
+        entry.error = null;
+        entry.pages = nextPages;
+        entry.pageParams = nextPageParams;
+        entry.tags = normalizeResourceTags(resolveResourceTags(definition, data as TData, params as TParams));
+        entry.finishedAt = finishedAt;
+        entry.duration = finishedAt - startedAt;
+        entry.updatedAt = finishedAt;
+        entry.inFlight = null;
+        scheduleResourceGc(entry, definition);
+        notifyResourceEntry(entry);
+        dispatchEvent({
+          type: "resource.fetch.succeeded",
+          name: resourceName,
+          key,
+          duration: finishedAt - startedAt,
+          timestamp: finishedAt,
+          metadata: { mesh: name, tags: entry.tags, ...fetchOptions.metadata }
+        });
+        return result as TData;
+      })
+      .catch((error) => {
+        const wrapped = error instanceof ResourceError
+          ? error
+          : new ResourceError(`Resource "${resourceName}" failed to fetch.`, {
+              cause: error,
+              metadata: { resource: resourceName, key }
+            });
+        entry.status = entry.data === null || entry.data === undefined ? "error" : entry.status;
+        entry.pending = false;
+        entry.fetching = false;
+        entry.error = wrapped;
+        entry.finishedAt = Date.now();
+        entry.duration = entry.finishedAt - startedAt;
+        entry.inFlight = null;
+        notifyResourceEntry(entry);
+        dispatchEvent({
+          type: "resource.fetch.failed",
+          name: resourceName,
+          key,
+          error: wrapped,
+          timestamp: Date.now(),
+          metadata: { mesh: name, ...fetchOptions.metadata }
+        });
+        throw wrapped;
+      });
+
+    entry.inFlight = promise;
+    return promise;
+  }
+
+  function getResourceStatus<TData = unknown, TParams = unknown>(resourceName: string, params?: TParams): ResourceStatus<TData, TParams> {
+    const definition = getResourceDefinition<TParams, TData>(resourceName);
+    const key = getResourceCacheKey(resourceName, definition, params);
+    const entry = ensureResourceEntry(resourceName, key, params, definition);
+    return createResourceStatus<TData, TParams>(entry, definition);
+  }
+
+  function setResourceData<TData = unknown, TParams = unknown>(
+    resourceName: string,
+    params: TParams | undefined,
+    updater: TData | ((current: TData | null) => TData),
+    setOptions: ResourceSetDataOptions = {}
+  ): void {
+    const definition = getResourceDefinition<TParams, TData>(resourceName);
+    const key = getResourceCacheKey(resourceName, definition, params);
+    const entry = ensureResourceEntry(resourceName, key, params, definition);
+    const current = (entry.data ?? null) as TData | null;
+    const nextData = typeof updater === "function"
+      ? (updater as (current: TData | null) => TData)(current)
+      : updater;
+    const now = Date.now();
+
+    entry.status = "success";
+    entry.pending = false;
+    entry.fetching = false;
+    entry.stale = setOptions.stale ?? false;
+    entry.data = nextData;
+    entry.error = null;
+    entry.pages = [nextData];
+    entry.pageParams = [undefined];
+    entry.tags = normalizeResourceTags(setOptions.tags ?? resolveResourceTags(definition, nextData, params as TParams));
+    entry.updatedAt = now;
+    entry.finishedAt = now;
+    entry.duration = 0;
+    scheduleResourceGc(entry, definition);
+    notifyResourceEntry(entry);
+    dispatchEvent({
+      type: "resource.fetch.succeeded",
+      name: resourceName,
+      key,
+      duration: 0,
+      timestamp: now,
+      metadata: { mesh: name, source: "setData", ...setOptions.metadata }
+    });
+  }
+
+  async function invalidateResources(invalidation?: ResourceInvalidation): Promise<void> {
+    const normalized = normalizeInvalidation(invalidation);
+    const refetches: Array<Promise<unknown>> = [];
+    const affectedTags = normalizeResourceTags(normalized.tags);
+
+    for (const entry of resourceEntries.values()) {
+      const definition = resourceDefinitions.get(entry.name);
+      if (!definition || !resourceEntryMatchesInvalidation(entry, normalized)) continue;
+      entry.stale = true;
+      notifyResourceEntry(entry);
+      dispatchEvent({
+        type: "resource.invalidated",
+        name: entry.name,
+        key: entry.key,
+        tags: affectedTags.length > 0 ? affectedTags : entry.tags,
+        timestamp: Date.now(),
+        metadata: { mesh: name, ...normalized.metadata }
+      });
+
+      const listenerCount = resourceListeners.get(entry.key)?.size ?? 0;
+      const shouldRefetch = normalized.refetch === true || (normalized.refetch === "active" && listenerCount > 0);
+      if (shouldRefetch) {
+        refetches.push(fetchResourceInternal(entry.name, entry.params, {
+          force: true,
+          background: true,
+          metadata: normalized.metadata
+        }, false).catch(() => undefined));
+      }
+    }
+
+    await Promise.all(refetches);
+  }
+
+  function subscribeResource(resourceName: string, listener: () => void, subscribeOptions: ResourceSubscribeOptions = {}): Unsubscribe {
+    const definition = getResourceDefinition<unknown, unknown>(resourceName);
+    const key = getResourceCacheKey(resourceName, definition, subscribeOptions.params);
+    ensureResourceEntry(resourceName, key, subscribeOptions.params, definition);
+    let listeners = resourceListeners.get(key);
+    if (!listeners) {
+      listeners = new Set();
+      resourceListeners.set(key, listeners);
+    }
+    listeners.add(listener);
+    return () => {
+      listeners?.delete(listener);
+      if (listeners?.size === 0) resourceListeners.delete(key);
+    };
+  }
+
+  function dehydrateResources(dehydrateOptions: ResourceDehydrateOptions = {}): ResourceSnapshot {
+    const entries: ResourceSnapshotEntry[] = [];
+    for (const entry of resourceEntries.values()) {
+      if (entry.status !== "success") continue;
+      const definition = resourceDefinitions.get(entry.name);
+      if (!definition) continue;
+      const status = createResourceStatus(entry, definition);
+      if (!resourceStatusMatchesFilter(status, dehydrateOptions)) continue;
+      entries.push({
+        name: entry.name,
+        key: entry.key,
+        params: cloneState(entry.params),
+        data: cloneState(entry.data),
+        tags: [...entry.tags],
+        pages: cloneState(entry.pages),
+        pageParams: cloneState(entry.pageParams),
+        stale: entry.stale,
+        updatedAt: entry.updatedAt,
+        finishedAt: entry.finishedAt
+      });
+    }
+
+    return {
+      version: 1,
+      createdAt: Date.now(),
+      entries
+    };
+  }
+
+  function hydrateResources(snapshot: ResourceSnapshot, hydrateOptions: ResourceHydrateOptions = {}): void {
+    const skipMissing = hydrateOptions.skipMissing ?? true;
+    let hydrated = 0;
+    for (const snapshotEntry of snapshot.entries ?? []) {
+      const definition = resourceDefinitions.get(snapshotEntry.name);
+      if (!definition) {
+        if (skipMissing) continue;
+        throw new ResourceError(`Cannot hydrate missing resource "${snapshotEntry.name}".`, {
+          metadata: { resource: snapshotEntry.name }
+        });
+      }
+
+      const entry: ResourceEntry = {
+        name: snapshotEntry.name,
+        key: snapshotEntry.key,
+        params: cloneState(snapshotEntry.params),
+        status: "success",
+        pending: false,
+        fetching: false,
+        stale: hydrateOptions.stale ?? snapshotEntry.stale,
+        data: cloneState(snapshotEntry.data),
+        error: null,
+        tags: [...snapshotEntry.tags],
+        pages: cloneState(snapshotEntry.pages),
+        pageParams: cloneState(snapshotEntry.pageParams),
+        startedAt: null,
+        finishedAt: snapshotEntry.finishedAt,
+        duration: null,
+        updatedAt: snapshotEntry.updatedAt,
+        controller: null,
+        inFlight: null,
+        gcTimer: null
+      };
+      resourceEntries.set(snapshotEntry.key, entry);
+      scheduleResourceGc(entry, definition);
+      notifyResourceEntry(entry);
+      hydrated += 1;
+    }
+
+    if (hydrated > 0) {
+      dispatchEvent({
+        type: "resource.hydrated",
+        count: hydrated,
+        timestamp: Date.now(),
+        metadata: { mesh: name, ...hydrateOptions.metadata }
+      });
+    }
+  }
+
+  function persistResources(persistOptions: ResourcePersistOptions = {}): Unsubscribe {
+    const storageKey = persistOptions.key ?? `${name}:resources`;
+    const serializer = persistOptions.serializer ?? JSON.stringify;
+    const deserializer = persistOptions.deserializer ?? JSON.parse;
+    const storage = resolveStorageAdapter(persistOptions.storage ?? "localStorage");
+    const version = persistOptions.version ?? 1;
+    const ttl = parseDurationOptional(persistOptions.ttl);
+
+    try {
+      const raw = storage.getItem(storageKey);
+      if (raw) {
+        const envelope = deserializer(raw) as {
+          version?: number;
+          expiresAt?: number | null;
+          snapshot?: ResourceSnapshot;
+        };
+        if (!envelope.expiresAt || envelope.expiresAt > Date.now()) {
+          let snapshot = envelope.snapshot;
+          if (snapshot && envelope.version !== undefined && envelope.version !== version && persistOptions.migrate) {
+            snapshot = persistOptions.migrate(snapshot, envelope.version);
+          }
+          if (snapshot) hydrateResources(snapshot, { metadata: persistOptions.metadata });
+        } else {
+          storage.removeItem(storageKey);
+        }
+      }
+    } catch (error) {
+      const wrapped = new ResourceError("StateMesh resource cache restore failed; persisted resource data was ignored.", {
+        cause: error,
+        metadata: { key: storageKey }
+      });
+      persistOptions.onError?.(wrapped);
+      dispatchEvent({ type: "resource.persist.failed", error: wrapped, timestamp: Date.now(), metadata: persistOptions.metadata });
+    }
+
+    const save = () => {
+      try {
+        const snapshot = dehydrateResources(persistOptions);
+        const envelope = {
+          version,
+          updatedAt: Date.now(),
+          expiresAt: ttl ? Date.now() + ttl : null,
+          snapshot
+        };
+        storage.setItem(storageKey, serializer(envelope));
+        dispatchEvent({
+          type: "resource.persisted",
+          count: snapshot.entries.length,
+          timestamp: Date.now(),
+          metadata: { key: storageKey, ...persistOptions.metadata }
+        });
+      } catch (error) {
+        const wrapped = new ResourceError("StateMesh resource cache save failed.", {
+          cause: error,
+          metadata: { key: storageKey }
+        });
+        persistOptions.onError?.(wrapped);
+        dispatchEvent({ type: "resource.persist.failed", error: wrapped, timestamp: Date.now(), metadata: persistOptions.metadata });
+      }
+    };
+
+    const saveWithThrottle = persistOptions.throttle ? debounce(save, persistOptions.throttle) : save;
+    const listener = () => saveWithThrottle();
+    resourceChangeListeners.add(listener);
+    saveWithThrottle();
+
+    return () => {
+      if (hasCancel(saveWithThrottle)) saveWithThrottle.cancel();
+      resourceChangeListeners.delete(listener);
+    };
+  }
+
+  function mutation<TPayload = void, TResult = unknown>(
+    mutationName: string,
+    definition: MutationDefinition<TState, TPayload, TResult>,
+    options: MeshRegistryOptions = {}
+  ): MutationHandle<TPayload, TResult> {
+    assertCanRegister(mutationDefinitions, "mutation", mutationName, options.replace);
+    const runtime = mutationRuntime.get(mutationName);
+    if (runtime && options.replace) runtime.controller?.abort();
+    mutationDefinitions.set(mutationName, definition as MutationDefinition<TState, unknown, unknown>);
+    mutationStatuses.set(mutationName, { ...DEFAULT_MUTATION_STATUS });
+    mutationRuntime.set(mutationName, {
+      controller: null,
+      inFlight: null,
+      queue: Promise.resolve(),
+      lastPayload: undefined
+    });
+    return createMutationHandle<TPayload, TResult>(mutationName);
+  }
+
+  function createMutationHandle<TPayload, TResult>(mutationName: string): MutationHandle<TPayload, TResult> {
+    return {
+      mutationName,
+      kind: "statemesh.mutation",
+      run: (payload: TPayload) => runMutation<TPayload, TResult>(mutationName, payload),
+      reset: () => resetMutation(mutationName),
+      get status() {
+        return getMutationStatus<TResult>(mutationName).status;
+      },
+      get pending() {
+        return getMutationStatus<TResult>(mutationName).pending;
+      },
+      get queued() {
+        return getMutationStatus<TResult>(mutationName).queued;
+      },
+      get success() {
+        return getMutationStatus<TResult>(mutationName).success;
+      },
+      get data() {
+        return getMutationStatus<TResult>(mutationName).data;
+      },
+      get error() {
+        return getMutationStatus<TResult>(mutationName).error;
+      },
+      get lastPayload() {
+        return getMutationStatus<TResult>(mutationName).lastPayload;
+      },
+      get startedAt() {
+        return getMutationStatus<TResult>(mutationName).startedAt;
+      },
+      get finishedAt() {
+        return getMutationStatus<TResult>(mutationName).finishedAt;
+      },
+      get duration() {
+        return getMutationStatus<TResult>(mutationName).duration;
+      },
+      get runs() {
+        return getMutationStatus<TResult>(mutationName).runs;
+      },
+      get queueSize() {
+        return getMutationStatus<TResult>(mutationName).queueSize;
+      }
+    };
+  }
+
+  function runMutation<TPayload = void, TResult = unknown>(mutationName: string, payload: TPayload): Promise<TResult> {
+    assertActive();
+    const definition = mutationDefinitions.get(mutationName) as MutationDefinition<TState, TPayload, TResult> | undefined;
+    const runtime = mutationRuntime.get(mutationName);
+    if (!definition || !runtime) {
+      throw new MutationError(`Mutation "${mutationName}" is not registered.`, {
+        metadata: { mutation: mutationName }
+      });
+    }
+
+    if (shouldQueueMutation(definition)) {
+      return queueOfflineMutation<TPayload, TResult>(mutationName, payload);
+    }
+
+    const concurrency = definition.concurrency ?? "block";
+    if (concurrency === "block" && runtime.inFlight) {
+      return Promise.reject(new MutationError(`Mutation "${mutationName}" is already running.`, {
+        code: "STATEMESH_MUTATION_BLOCKED",
+        metadata: { mutation: mutationName, concurrency }
+      }));
+    }
+
+    if (concurrency === "queue") {
+      const queued = runtime.queue.then(
+        () => startMutation(mutationName, definition, runtime, payload),
+        () => startMutation(mutationName, definition, runtime, payload)
+      );
+      runtime.queue = queued.then(() => undefined, () => undefined);
+      return queued;
+    }
+
+    if (concurrency === "takeLatest" && runtime.inFlight) {
+      runtime.controller?.abort();
+    }
+
+    return startMutation(mutationName, definition, runtime, payload);
+  }
+
+  function startMutation<TPayload, TResult>(
+    mutationName: string,
+    definition: MutationDefinition<TState, TPayload, TResult>,
+    runtime: MutationRuntime,
+    payload: TPayload
+  ): Promise<TResult> {
+    const promise = executeMutation(mutationName, definition, runtime, payload);
+    runtime.inFlight = promise;
+    promise.finally(() => {
+      if (runtime.inFlight === promise) runtime.inFlight = null;
+    }).catch(() => {
+      // The original promise carries the mutation error to the caller.
+    });
+    return promise;
+  }
+
+  async function executeMutation<TPayload, TResult>(
+    mutationName: string,
+    definition: MutationDefinition<TState, TPayload, TResult>,
+    runtime: MutationRuntime,
+    payload: TPayload
+  ): Promise<TResult> {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const stateSnapshot = cloneState(state);
+    const resourceSnapshot = cloneResourceEntries();
+    runtime.controller = controller;
+    runtime.lastPayload = payload;
+    const context = createMutationContext(mutationName, payload, controller.signal);
+
+    setMutationStatus(mutationName, {
+      status: "pending",
+      pending: true,
+      success: false,
+      error: null,
+      lastPayload: payload,
+      startedAt,
+      finishedAt: null,
+      duration: null,
+      runs: (mutationStatuses.get(mutationName)?.runs ?? 0) + 1
+    });
+    dispatchEvent({
+      type: "mutation.started",
+      name: mutationName,
+      payload: summarizePayload(payload),
+      timestamp: startedAt,
+      metadata: { mesh: name }
+    });
+
+    try {
+      if (definition.optimistic) {
+        await applyDraftAsync((draft) => definition.optimistic?.(draft, payload, context), createStateEvent(undefined, {
+          mutation: mutationName,
+          phase: "optimistic"
+        }));
+        dispatchEvent({ type: "mutation.optimistic", name: mutationName, timestamp: Date.now(), metadata: { mesh: name } });
+      }
+
+      const result = await definition.mutate(payload, context);
+
+      if (definition.commit) {
+        await applyDraftAsync((draft) => definition.commit?.(draft, result, payload, context), createStateEvent(undefined, {
+          mutation: mutationName,
+          phase: "commit"
+        }));
+      }
+
+      await definition.onSuccess?.(result, payload, context);
+      const invalidationTags = typeof definition.invalidate === "function"
+        ? definition.invalidate(result, payload)
+        : definition.invalidate;
+      if (invalidationTags?.length) {
+        await invalidateResources({ tags: invalidationTags, refetch: definition.refetch ?? "active" });
+      }
+
+      const finishedAt = Date.now();
+      setMutationStatus(mutationName, {
+        status: "success",
+        pending: false,
+        success: true,
+        data: result,
+        error: null,
+        finishedAt,
+        duration: finishedAt - startedAt
+      });
+      dispatchEvent({
+        type: "mutation.succeeded",
+        name: mutationName,
+        duration: finishedAt - startedAt,
+        timestamp: finishedAt,
+        metadata: { mesh: name }
+      });
+      return result;
+    } catch (error) {
+      const wrapped = error instanceof MutationError
+        ? error
+        : new MutationError(`Mutation "${mutationName}" failed.`, {
+            cause: error,
+            metadata: { mutation: mutationName, payload: summarizePayload(payload) }
+          });
+
+      const shouldRollback = definition.rollback === true || (definition.rollback === undefined && Boolean(definition.optimistic));
+      if (shouldRollback) {
+        restoreResourceEntries(resourceSnapshot);
+        commitState(cloneState(stateSnapshot), createStateEvent(undefined, { mutation: mutationName, phase: "rollback" }));
+        dispatchEvent({ type: "mutation.rollback", name: mutationName, timestamp: Date.now(), metadata: { mesh: name } });
+      } else if (typeof definition.rollback === "function") {
+        await applyDraftAsync((draft) => definition.rollback instanceof Function
+          ? definition.rollback(draft, wrapped, payload, context)
+          : undefined, createStateEvent(undefined, { mutation: mutationName, phase: "rollback" }));
+      }
+
+      await definition.onError?.(wrapped, payload, context);
+      const finishedAt = Date.now();
+      setMutationStatus(mutationName, {
+        status: "error",
+        pending: false,
+        success: false,
+        error: wrapped,
+        finishedAt,
+        duration: finishedAt - startedAt
+      });
+      dispatchEvent({
+        type: "mutation.failed",
+        name: mutationName,
+        error: wrapped,
+        timestamp: finishedAt,
+        metadata: { mesh: name }
+      });
+      throw wrapped;
+    } finally {
+      runtime.controller = null;
+    }
+  }
+
+  function getMutationStatus<TResult = unknown>(mutationName: string): MutationStatus<TResult> {
+    return {
+      ...(mutationStatuses.get(mutationName) ?? DEFAULT_MUTATION_STATUS)
+    } as MutationStatus<TResult>;
+  }
+
+  function setMutationStatus(mutationName: string, partial: Partial<MutationStatus>): void {
+    const current = mutationStatuses.get(mutationName) ?? DEFAULT_MUTATION_STATUS;
+    const status = normalizeMutationStatus({ ...current, ...partial });
+    mutationStatuses.set(mutationName, status);
+    for (const listener of mutationListeners.get(mutationName) ?? []) listener();
+  }
+
+  function normalizeMutationStatus(status: MutationStatus): MutationStatus {
+    return {
+      ...status,
+      pending: status.status === "pending",
+      queued: status.status === "queued" || status.queueSize > 0,
+      success: status.status === "success"
+    };
+  }
+
+  function subscribeMutation(mutationName: string, listener: () => void): Unsubscribe {
+    let listeners = mutationListeners.get(mutationName);
+    if (!listeners) {
+      listeners = new Set();
+      mutationListeners.set(mutationName, listeners);
+    }
+    listeners.add(listener);
+    return () => listeners?.delete(listener);
+  }
+
+  function resetMutation(mutationName: string): void {
+    mutationStatuses.set(mutationName, { ...DEFAULT_MUTATION_STATUS });
+    for (const listener of mutationListeners.get(mutationName) ?? []) listener();
+  }
+
+  function getQueuedMutations(): QueuedMutation[] {
+    return queuedMutations.map(({ resolve: _resolve, reject: _reject, ...queued }) => ({
+      ...queued,
+      payload: cloneState(queued.payload)
+    }));
+  }
+
+  async function runQueuedMutations(): Promise<void> {
+    if (isOffline()) return;
+    let flushed = 0;
+    while (queuedMutations.length > 0) {
+      const queued = queuedMutations.shift();
+      if (!queued) continue;
+      const definition = mutationDefinitions.get(queued.name);
+      const runtime = mutationRuntime.get(queued.name);
+      updateMutationQueueSize(queued.name);
+      if (!definition || !runtime) {
+        const error = new MutationError(`Queued mutation "${queued.name}" is no longer registered.`, {
+          metadata: { mutation: queued.name, queuedAt: queued.queuedAt }
+        });
+        queued.reject(error);
+        continue;
+      }
+
+      try {
+        const result = await startMutation(queued.name, definition, runtime, queued.payload);
+        queued.resolve(result);
+        flushed += 1;
+      } catch (error) {
+        queued.reject(toError(error));
+      }
+    }
+
+    if (flushed > 0) {
+      dispatchEvent({
+        type: "mutation.queue.flushed",
+        count: flushed,
+        timestamp: Date.now(),
+        metadata: { mesh: name }
+      });
+    }
+  }
+
+  function clearQueuedMutations(error?: Error): void {
+    const queueError = error ?? new MutationError("Queued mutations were cleared.", {
+      code: "STATEMESH_MUTATION_QUEUE_CLEARED",
+      metadata: { mesh: name }
+    });
+    while (queuedMutations.length > 0) {
+      const queued = queuedMutations.shift();
+      queued?.reject(queueError);
+      if (queued) updateMutationQueueSize(queued.name);
+    }
+  }
+
+  function queueOfflineMutation<TPayload, TResult>(mutationName: string, payload: TPayload): Promise<TResult> {
+    const queuedAt = Date.now();
+    return new Promise<TResult>((resolve, reject) => {
+      queuedMutations.push({
+        id: `${mutationName}_${queuedAt}_${++idCounter}`,
+        name: mutationName,
+        payload: cloneState(payload),
+        queuedAt,
+        resolve: resolve as (value: unknown) => void,
+        reject
+      });
+      updateMutationQueueSize(mutationName);
+      dispatchEvent({
+        type: "mutation.queued",
+        name: mutationName,
+        payload: summarizePayload(payload),
+        timestamp: queuedAt,
+        metadata: { mesh: name }
+      });
+    });
+  }
+
+  function updateMutationQueueSize(mutationName: string): void {
+    const queueSize = queuedMutations.filter((queued) => queued.name === mutationName).length;
+    const current = mutationStatuses.get(mutationName) ?? DEFAULT_MUTATION_STATUS;
+    setMutationStatus(mutationName, {
+      queueSize,
+      queued: queueSize > 0,
+      status: queueSize > 0 && current.status === "idle"
+        ? "queued"
+        : queueSize === 0 && current.status === "queued"
+          ? "idle"
+          : current.status
+    });
+  }
+
+  function shouldQueueMutation<TPayload, TResult>(
+    definition: MutationDefinition<TState, TPayload, TResult>
+  ): boolean {
+    if (!isOffline()) return false;
+    const offline = definition.offline;
+    if (!offline) return false;
+    if (offline === true) return true;
+    return offline.queue ?? true;
+  }
+
+  function handleOnline(): void {
+    const shouldFlush = [...mutationDefinitions.values()].some((definition) => {
+      const offline = definition.offline;
+      if (!offline) return false;
+      if (offline === true) return true;
+      return offline.flushOnReconnect ?? true;
+    });
+    if (shouldFlush) runQueuedMutations().catch(() => undefined);
+  }
+
+  function normalizeEntities<TEntity, TId extends string | number = string | number>(
+    entities: readonly TEntity[],
+    selectId: EntityIdSelector<TEntity, TId>
+  ): EntityCollection<TEntity, TId> {
+    return mergeEntities<TEntity, TId>({ byId: {}, allIds: [] }, entities, selectId);
+  }
+
+  function mergeEntities<TEntity, TId extends string | number = string | number>(
+    collection: EntityCollection<TEntity, TId> | null | undefined,
+    entities: readonly TEntity[],
+    selectId: EntityIdSelector<TEntity, TId>
+  ): EntityCollection<TEntity, TId> {
+    const byId = { ...(collection?.byId ?? {}) };
+    const allIds = [...(collection?.allIds ?? [])];
+    const seen = new Set(allIds.map(String));
+
+    for (const entity of entities) {
+      const id = getEntityId(entity, selectId);
+      byId[String(id)] = {
+        ...(byId[String(id)] as Record<string, unknown> | undefined),
+        ...(entity as Record<string, unknown>)
+      } as TEntity;
+      if (!seen.has(String(id))) {
+        allIds.push(id);
+        seen.add(String(id));
+      }
+    }
+
+    return { byId, allIds };
+  }
+
+  function removeEntities<TEntity, TId extends string | number = string | number>(
+    collection: EntityCollection<TEntity, TId>,
+    ids: readonly TId[]
+  ): EntityCollection<TEntity, TId> {
+    const removeSet = new Set(ids.map(String));
+    const byId = { ...collection.byId };
+    for (const id of removeSet) delete byId[id];
+    return {
+      byId,
+      allIds: collection.allIds.filter((id) => !removeSet.has(String(id)))
+    };
+  }
+
+  function denormalizeEntities<TEntity, TId extends string | number = string | number>(
+    collection: EntityCollection<TEntity, TId>
+  ): TEntity[] {
+    return collection.allIds
+      .map((id) => collection.byId[String(id)])
+      .filter((entity): entity is TEntity => entity !== undefined);
+  }
+
+  function createMutationContext<TPayload>(
+    mutationName: string,
+    payload: TPayload,
+    signal: AbortSignal
+  ): MutationContext<TState, TPayload> {
+    return {
+      name: mutationName,
+      payload,
+      signal,
+      mesh,
+      getResourceData: <TData = unknown, TParams = unknown>(
+        resourceRef: string | ResourceHandle<TParams, TData>,
+        params?: TParams
+      ): TData | null => {
+        const resourceName = typeof resourceRef === "string" ? resourceRef : resourceRef.resourceName;
+        return getResourceStatus<TData, TParams>(resourceName, params).data;
+      },
+      setResourceData: <TData = unknown, TParams = unknown>(
+        resourceRef: string | ResourceHandle<TParams, TData>,
+        params: TParams | undefined,
+        updater: TData | ((current: TData | null) => TData),
+        setOptions?: ResourceSetDataOptions
+      ) => {
+        const resourceName = typeof resourceRef === "string" ? resourceRef : resourceRef.resourceName;
+        setResourceData<TData, TParams>(resourceName, params, updater, setOptions);
+      },
+      invalidate: (resourceInvalidation) => invalidateResources(resourceInvalidation)
+    };
+  }
+
   function applyDraft(mutator: (draft: TState) => void, event: MeshEvent): void {
     batcher.batch(() => {
       const draft = cloneState(state);
       mutator(draft);
       commitState(draft, event);
     });
+  }
+
+  async function applyDraftAsync(mutator: (draft: TState) => MaybePromise<void>, event: MeshEvent): Promise<void> {
+    const draft = cloneState(state);
+    await mutator(draft);
+    commitState(draft, event);
   }
 
   function persist(persistOptions: PersistOptions<TState>): Unsubscribe {
@@ -1174,21 +2219,21 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   ): void {
     assertCanRegister(formEntries, "form", formName, options.replace);
     const existing = formEntries.get(formName);
+    if (existing && options.replace) {
+      existing.autosave?.cancel();
+    }
     const initialValues = cloneState(definition.initialValues);
-    formEntries.set(formName, {
+    const entry: FormEntry<Record<string, unknown>> = {
       definition: definition as FormDefinition<Record<string, unknown>>,
       initialValues,
-      state: {
-        values: cloneState(initialValues),
-        errors: {},
-        touched: {},
-        dirty: false,
-        submitting: false,
-        submitted: false,
-        submitError: null
-      },
-      listeners: existing?.listeners ?? new Set()
-    } as FormEntry<Record<string, unknown>>);
+      state: createInitialFormState(initialValues, definition as FormDefinition<Record<string, unknown>>),
+      listeners: existing?.listeners ?? new Set(),
+      validationRun: null,
+      fieldValidationRuns: new Map(),
+      autosave: null
+    };
+    entry.autosave = createFormAutosave(formName, entry);
+    formEntries.set(formName, entry);
     if (existing && options.replace) {
       notifyForm(formName);
     }
@@ -1217,11 +2262,15 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
             touched: { ...entry.state.touched, [fieldName]: true }
           };
           notifyForm(formName, fieldName);
+          if (entry.definition.validateOnBlur ?? Boolean(entry.definition.fields?.[fieldName])) {
+            validateFormField(entry, formName, fieldName).catch(() => undefined);
+          }
         }
       }),
       setValue: <K extends keyof TValues & string>(fieldName: K, value: TValues[K]) => {
         setFormValue(entry, formName, fieldName, value);
       },
+      fieldArray: <K extends keyof TValues & string>(fieldName: K) => createFormFieldArray(entry, formName, fieldName),
       setError: <K extends keyof TValues & string>(fieldName: K, error: string | null) => {
         entry.state = {
           ...entry.state,
@@ -1229,48 +2278,23 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
         };
         notifyForm(formName, fieldName);
       },
-      reset: () => {
-        entry.state = {
-          values: cloneState(entry.initialValues),
-          errors: {},
-          touched: {},
-          dirty: false,
-          submitting: false,
-          submitted: false,
-          submitError: null
-        };
-        notifyForm(formName);
-      },
+      setServerErrors: (errors: FormErrors<TValues>) => setFormServerErrors(entry, formName, errors),
+      reset: (values?: TValues) => resetForm(entry, formName, values),
+      resetToServer: (values: TValues) => resetForm(entry, formName, values),
       validate: () => validateForm(entry, formName),
+      validateField: <K extends keyof TValues & string>(fieldName: K) => validateFormField(entry, formName, fieldName),
+      validateStep: () => validateFormStep(entry, formName),
       submit: async (event?: { preventDefault?: () => void }) => {
         event?.preventDefault?.();
-        const errors = await validateForm(entry, formName);
-        if (Object.keys(errors).length > 0) return;
-
-        entry.state = { ...entry.state, submitting: true, submitError: null };
-        notifyForm(formName);
-
-        try {
-          const submitter = entry.definition.submit;
-          if (typeof submitter === "string") {
-            await runTransaction(submitter, entry.state.values);
-          } else if (typeof submitter === "function") {
-            await submitter(entry.state.values);
-          }
-          entry.state = { ...entry.state, submitting: false, submitted: true };
-          notifyForm(formName);
-        } catch (error) {
-          const formError = toError(error);
-          const mappedErrors = entry.definition.mapServerErrors?.(formError) ?? {};
-          entry.state = {
-            ...entry.state,
-            submitting: false,
-            submitError: formError,
-            errors: { ...entry.state.errors, ...mappedErrors }
-          };
-          notifyForm(formName);
-        }
-      }
+        await submitForm(entry, formName, "submit");
+      },
+      autosaveNow: () => submitForm(entry, formName, "autosave"),
+      nextStep: () => moveFormStep(entry, formName, entry.state.stepIndex + 1, true),
+      previousStep: () => {
+        const previous = Math.max(0, entry.state.stepIndex - 1);
+        setFormStep(entry, formName, previous);
+      },
+      goToStep: (step: string | number) => moveFormStep(entry, formName, step, true)
     } satisfies FormApi<TValues>;
 
     return api;
@@ -1356,35 +2380,780 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     dispatchEvent({ type: "form.changed", name: formName, field, timestamp: Date.now() });
   }
 
+  function createInitialFormState<TValues extends Record<string, unknown>>(
+    initialValues: TValues,
+    definition: FormDefinition<TValues>
+  ): FormState<TValues> {
+    const steps = definition.steps ?? [];
+    return {
+      values: cloneState(initialValues),
+      initialValues: cloneState(initialValues),
+      errors: {},
+      serverErrors: {},
+      touched: {},
+      dirtyFields: {},
+      dirty: false,
+      validating: false,
+      validatingFields: {},
+      submitting: false,
+      autosaving: false,
+      submitted: false,
+      submitError: null,
+      autosaveError: null,
+      autosavedAt: null,
+      currentStep: steps[0]?.name ?? null,
+      stepIndex: steps.length > 0 ? 0 : -1,
+      steps
+    };
+  }
+
+  function createFormAutosave<TValues extends Record<string, unknown>>(
+    formName: string,
+    entry: FormEntry<TValues>
+  ): FormEntry<TValues>["autosave"] {
+    const autosaveOptions = normalizeFormAutosave(entry.definition.autosave);
+    if (!autosaveOptions) return null;
+    return debounce(() => {
+      submitForm(entry, formName, "autosave").catch(() => undefined);
+    }, autosaveOptions.debounce ?? 500);
+  }
+
   function setFormValue<TValues extends Record<string, unknown>, K extends keyof TValues & string>(
     entry: FormEntry<TValues>,
     formName: string,
     fieldName: K,
     value: TValues[K]
   ): void {
+    const dirtyFields = updateDirtyFields(entry, fieldName, value);
+    const serverErrors = entry.definition.clearServerErrorOnChange === false
+      ? entry.state.serverErrors
+      : updateError(entry.state.serverErrors, fieldName, null);
+    const errors = entry.definition.clearServerErrorOnChange === false
+      ? entry.state.errors
+      : updateError(entry.state.errors, fieldName, null);
+
     entry.state = {
       ...entry.state,
       values: { ...entry.state.values, [fieldName]: value },
       touched: { ...entry.state.touched, [fieldName]: true },
-      dirty: true
+      dirtyFields,
+      serverErrors,
+      errors,
+      dirty: formHasDirtyFields(dirtyFields),
+      submitted: false
     };
     notifyForm(formName, fieldName);
+    if (entry.definition.validateOnChange) {
+      validateFormField(entry, formName, fieldName).catch(() => undefined);
+    }
+    scheduleFormAutosave(entry);
+  }
+
+  function createFormFieldArray<TValues extends Record<string, unknown>, K extends keyof TValues & string>(
+    entry: FormEntry<TValues>,
+    formName: string,
+    fieldName: K
+  ): FormFieldArrayApi<TValues, K> {
+    type Item = TValues[K] extends Array<infer TItem> ? TItem : unknown;
+    const items = Array.isArray(entry.state.values[fieldName])
+      ? [...entry.state.values[fieldName] as Item[]]
+      : [];
+
+    const replace = (nextItems: Item[]) => {
+      setFormValue(entry, formName, fieldName, nextItems as TValues[K]);
+    };
+
+    return {
+      name: fieldName,
+      items: items as TValues[K] extends Array<infer TItem> ? TItem[] : unknown[],
+      append: (item) => replace([...items, item as Item]),
+      insert: (index, item) => {
+        const next = [...items];
+        next.splice(clampIndex(index, next.length), 0, item as Item);
+        replace(next);
+      },
+      update: (index, item) => {
+        if (index < 0 || index >= items.length) return;
+        const next = [...items];
+        next[index] = item as Item;
+        replace(next);
+      },
+      remove: (index) => {
+        if (index < 0 || index >= items.length) return;
+        const next = [...items];
+        next.splice(index, 1);
+        replace(next);
+      },
+      move: (from, to) => {
+        if (from < 0 || from >= items.length) return;
+        const next = [...items];
+        const [item] = next.splice(from, 1);
+        if (item === undefined) return;
+        next.splice(clampIndex(to, next.length), 0, item);
+        replace(next);
+      },
+      replace: (nextItems) => replace([...(nextItems as Item[])])
+    };
   }
 
   async function validateForm<TValues extends Record<string, unknown>>(
     entry: FormEntry<TValues>,
     formName: string
   ): Promise<FormErrors<TValues>> {
+    const runId = Symbol(formName);
+    entry.validationRun = runId;
+    const validationValues = cloneState(entry.state.values);
     try {
-      const errors = (await entry.definition.validate?.(entry.state.values)) ?? {};
-      entry.state = { ...entry.state, errors };
+      entry.state = { ...entry.state, validating: true };
       notifyForm(formName);
+      dispatchEvent({ type: "form.validation.started", name: formName, timestamp: Date.now() });
+      const schemaErrors = (await entry.definition.schema?.validate(validationValues)) ?? {};
+      const formErrors = (await entry.definition.validate?.(validationValues)) ?? {};
+      const fieldErrors = await validateFormFields(
+        entry,
+        formName,
+        Object.keys(validationValues) as Array<keyof TValues & string>,
+        false,
+        validationValues
+      );
+      if (entry.validationRun !== runId) return entry.state.errors;
+      const errors = mergeFormErrors(schemaErrors, formErrors, fieldErrors, entry.state.serverErrors);
+      entry.validationRun = null;
+      entry.state = {
+        ...entry.state,
+        errors,
+        validating: false,
+        validatingFields: {}
+      };
+      notifyForm(formName);
+      dispatchEvent({
+        type: "form.validation.completed",
+        name: formName,
+        valid: Object.keys(errors).length === 0,
+        timestamp: Date.now()
+      });
       return errors;
     } catch (error) {
+      if (entry.validationRun !== runId) return entry.state.errors;
+      entry.validationRun = null;
+      entry.state = {
+        ...entry.state,
+        validating: false,
+        validatingFields: {}
+      };
+      notifyForm(formName);
       throw new FormError(`Validation for form "${formName}" failed.`, {
         cause: error,
         metadata: { form: formName }
       });
+    }
+  }
+
+  async function validateFormField<TValues extends Record<string, unknown>, K extends keyof TValues & string>(
+    entry: FormEntry<TValues>,
+    formName: string,
+    fieldName: K
+  ): Promise<string | null> {
+    const validator = entry.definition.fields?.[fieldName];
+    if (!validator) return entry.state.errors[fieldName] ?? null;
+
+    const runId = Symbol(fieldName);
+    entry.fieldValidationRuns.set(fieldName, runId);
+    const validationValues = cloneState(entry.state.values);
+    entry.state = {
+      ...entry.state,
+      validating: true,
+      validatingFields: { ...entry.state.validatingFields, [fieldName]: true }
+    };
+    notifyForm(formName, fieldName);
+    dispatchEvent({ type: "form.validation.started", name: formName, field: fieldName, timestamp: Date.now() });
+
+    try {
+      const error = (await validator(validationValues[fieldName], validationValues, fieldName)) ?? null;
+      if (entry.fieldValidationRuns.get(fieldName) !== runId) {
+        return entry.state.errors[fieldName] ?? null;
+      }
+      const nextError = error ?? entry.state.serverErrors[fieldName] ?? null;
+      const errors = updateError(entry.state.errors, fieldName, nextError);
+      entry.fieldValidationRuns.delete(fieldName);
+      const validatingFields = { ...entry.state.validatingFields };
+      delete validatingFields[fieldName];
+      entry.state = {
+        ...entry.state,
+        errors,
+        validatingFields,
+        validating: formHasValidatingFields(validatingFields)
+      };
+      notifyForm(formName, fieldName);
+      dispatchEvent({
+        type: "form.validation.completed",
+        name: formName,
+        field: fieldName,
+        valid: !nextError,
+        timestamp: Date.now()
+      });
+      return nextError;
+    } catch (error) {
+      if (entry.fieldValidationRuns.get(fieldName) !== runId) {
+        return entry.state.errors[fieldName] ?? null;
+      }
+      entry.fieldValidationRuns.delete(fieldName);
+      const validatingFields = { ...entry.state.validatingFields };
+      delete validatingFields[fieldName];
+      entry.state = {
+        ...entry.state,
+        validatingFields,
+        validating: formHasValidatingFields(validatingFields)
+      };
+      notifyForm(formName, fieldName);
+      throw new FormError(`Validation for field "${String(fieldName)}" in form "${formName}" failed.`, {
+        cause: error,
+        metadata: { form: formName, field: fieldName }
+      });
+    }
+  }
+
+  async function validateFormFields<TValues extends Record<string, unknown>>(
+    entry: FormEntry<TValues>,
+    formName: string,
+    fields: Array<keyof TValues & string>,
+    notify = true,
+    values: TValues = entry.state.values
+  ): Promise<FormErrors<TValues>> {
+    const errors: FormErrors<TValues> = {};
+    for (const field of fields) {
+      const validator = entry.definition.fields?.[field];
+      if (!validator) continue;
+      const error = (await validator(values[field], values, field)) ?? null;
+      if (error) errors[field] = error;
+    }
+
+    if (notify) {
+      entry.state = {
+        ...entry.state,
+        errors: mergeFormErrors(entry.state.errors, errors, entry.state.serverErrors)
+      };
+      notifyForm(formName);
+    }
+
+    return errors;
+  }
+
+  async function validateFormStep<TValues extends Record<string, unknown>>(
+    entry: FormEntry<TValues>,
+    formName: string
+  ): Promise<FormErrors<TValues>> {
+    const step = entry.state.steps[entry.state.stepIndex];
+    if (!step) return validateForm(entry, formName);
+
+    entry.state = { ...entry.state, validating: true };
+    notifyForm(formName);
+    dispatchEvent({ type: "form.validation.started", name: formName, timestamp: Date.now(), metadata: { step: step.name } });
+
+    try {
+      const errors = mergeFormErrors(
+        pickFormErrors((await entry.definition.schema?.validate(entry.state.values)) ?? {}, step.fields as Array<keyof TValues & string>),
+        await validateFormFields(entry, formName, step.fields as Array<keyof TValues & string>, false),
+        pickFormErrors(entry.state.serverErrors, step.fields as Array<keyof TValues & string>)
+      );
+      entry.state = {
+        ...entry.state,
+        errors: mergeFormErrors(omitFormErrors(entry.state.errors, step.fields as Array<keyof TValues & string>), errors),
+        validating: false
+      };
+      notifyForm(formName);
+      dispatchEvent({
+        type: "form.validation.completed",
+        name: formName,
+        valid: Object.keys(errors).length === 0,
+        timestamp: Date.now(),
+        metadata: { step: step.name }
+      });
+      return errors;
+    } catch (error) {
+      entry.state = { ...entry.state, validating: false };
+      notifyForm(formName);
+      throw error;
+    }
+  }
+
+  async function submitForm<TValues extends Record<string, unknown>>(
+    entry: FormEntry<TValues>,
+    formName: string,
+    mode: "submit" | "autosave"
+  ): Promise<void> {
+    const autosaveOptions = normalizeFormAutosave(entry.definition.autosave);
+    if (mode === "submit") entry.autosave?.cancel();
+    if (mode === "autosave") {
+      if (!autosaveOptions) return;
+      if (autosaveOptions.when && !autosaveOptions.when(entry.state)) return;
+      if (autosaveOptions.validate !== false) {
+        const errors = await validateForm(entry, formName);
+        if (Object.keys(errors).length > 0) return;
+      }
+    } else {
+      const errors = await validateForm(entry, formName);
+      if (Object.keys(errors).length > 0) return;
+    }
+
+    const startedAt = Date.now();
+    entry.state = mode === "autosave"
+      ? { ...entry.state, autosaving: true, autosaveError: null }
+      : { ...entry.state, submitting: true, submitError: null };
+    notifyForm(formName);
+    dispatchEvent({ type: mode === "autosave" ? "form.autosave.started" : "form.submit.started", name: formName, timestamp: startedAt });
+
+    try {
+      await runFormSubmitter(mode === "autosave" ? autosaveOptions?.submit ?? entry.definition.submit : entry.definition.submit, entry.state.values);
+      const finishedAt = Date.now();
+      entry.state = mode === "autosave"
+        ? { ...entry.state, autosaving: false, autosaveError: null, autosavedAt: finishedAt }
+        : { ...entry.state, submitting: false, submitted: true, submitError: null };
+      notifyForm(formName);
+      dispatchEvent({
+        type: mode === "autosave" ? "form.autosave.succeeded" : "form.submit.succeeded",
+        name: formName,
+        duration: finishedAt - startedAt,
+        timestamp: finishedAt
+      });
+    } catch (error) {
+      const formError = toError(error);
+      const mappedErrors = entry.definition.mapServerErrors?.(formError) ?? {};
+      const mergedErrors = mergeFormErrors(entry.state.errors, mappedErrors);
+      entry.state = mode === "autosave"
+        ? {
+            ...entry.state,
+            autosaving: false,
+            autosaveError: formError,
+            serverErrors: { ...entry.state.serverErrors, ...mappedErrors },
+            errors: mergedErrors
+          }
+        : {
+            ...entry.state,
+            submitting: false,
+            submitError: formError,
+            serverErrors: { ...entry.state.serverErrors, ...mappedErrors },
+            errors: mergedErrors
+          };
+      notifyForm(formName);
+      dispatchEvent({
+        type: mode === "autosave" ? "form.autosave.failed" : "form.submit.failed",
+        name: formName,
+        error: formError,
+        timestamp: Date.now()
+      });
+      if (mode === "submit") throw formError;
+    }
+  }
+
+  async function runFormSubmitter<TValues extends Record<string, unknown>>(
+    submitter: FormDefinition<TValues>["submit"] | undefined,
+    values: TValues
+  ): Promise<void> {
+    if (!submitter) return;
+    if (typeof submitter === "string") {
+      if (mutationDefinitions.has(submitter)) {
+        await runMutation(submitter, values);
+        return;
+      }
+      await runTransaction(submitter, values);
+      return;
+    }
+    if (typeof submitter === "function") {
+      await submitter(values);
+      return;
+    }
+    if (submitter.kind === "statemesh.mutation") {
+      await submitter.run(values);
+      return;
+    }
+    await submitter.run(values);
+  }
+
+  function setFormServerErrors<TValues extends Record<string, unknown>>(
+    entry: FormEntry<TValues>,
+    formName: string,
+    errors: FormErrors<TValues>
+  ): void {
+    const previousServerFields = Object.keys(entry.state.serverErrors) as Array<keyof TValues & string>;
+    entry.state = {
+      ...entry.state,
+      serverErrors: { ...errors },
+      errors: mergeFormErrors(omitFormErrors(entry.state.errors, previousServerFields), errors)
+    };
+    notifyForm(formName);
+  }
+
+  function resetForm<TValues extends Record<string, unknown>>(
+    entry: FormEntry<TValues>,
+    formName: string,
+    values?: TValues
+  ): void {
+    entry.autosave?.cancel();
+    entry.validationRun = null;
+    entry.fieldValidationRuns.clear();
+    const nextInitialValues = cloneState(values ?? entry.initialValues);
+    entry.initialValues = nextInitialValues;
+    entry.state = {
+      ...createInitialFormState(nextInitialValues, entry.definition),
+      autosavedAt: entry.state.autosavedAt
+    };
+    notifyForm(formName);
+  }
+
+  function scheduleFormAutosave<TValues extends Record<string, unknown>>(entry: FormEntry<TValues>): void {
+    entry.autosave?.();
+  }
+
+  async function moveFormStep<TValues extends Record<string, unknown>>(
+    entry: FormEntry<TValues>,
+    formName: string,
+    step: string | number,
+    validateCurrent: boolean
+  ): Promise<boolean> {
+    if (validateCurrent) {
+      const errors = await validateFormStep(entry, formName);
+      if (Object.keys(errors).length > 0) return false;
+    }
+    return setFormStep(entry, formName, step);
+  }
+
+  function setFormStep<TValues extends Record<string, unknown>>(
+    entry: FormEntry<TValues>,
+    formName: string,
+    step: string | number
+  ): boolean {
+    const stepIndex = typeof step === "number"
+      ? step
+      : entry.state.steps.findIndex((candidate) => candidate.name === step);
+    if (stepIndex < 0 || stepIndex >= entry.state.steps.length) return false;
+    entry.state = {
+      ...entry.state,
+      stepIndex,
+      currentStep: entry.state.steps[stepIndex]?.name ?? null
+    };
+    notifyForm(formName);
+    return true;
+  }
+
+  function normalizeFormAutosave<TValues extends Record<string, unknown>>(
+    autosave: FormDefinition<TValues>["autosave"]
+  ): FormAutosaveOptions<TValues> | null {
+    if (!autosave) return null;
+    if (autosave === true) return {};
+    return autosave;
+  }
+
+  function updateDirtyFields<TValues extends Record<string, unknown>, K extends keyof TValues & string>(
+    entry: FormEntry<TValues>,
+    fieldName: K,
+    value: TValues[K]
+  ): FormDirtyFields<TValues> {
+    const dirtyFields = { ...entry.state.dirtyFields };
+    if (formValueEqual(value, entry.state.initialValues[fieldName])) {
+      delete dirtyFields[fieldName];
+    } else {
+      dirtyFields[fieldName] = true;
+    }
+    return dirtyFields;
+  }
+
+  function formHasDirtyFields<TValues extends Record<string, unknown>>(dirtyFields: FormDirtyFields<TValues>): boolean {
+    return Object.values(dirtyFields).some(Boolean);
+  }
+
+  function formHasValidatingFields<TValues extends Record<string, unknown>>(
+    validatingFields: FormValidatingFields<TValues>
+  ): boolean {
+    return Object.values(validatingFields).some(Boolean);
+  }
+
+  function mergeFormErrors<TValues extends Record<string, unknown>>(
+    ...errorMaps: Array<FormErrors<TValues> | null | undefined>
+  ): FormErrors<TValues> {
+    const merged: FormErrors<TValues> = {};
+    for (const errors of errorMaps) {
+      if (!errors) continue;
+      for (const [field, error] of Object.entries(errors)) {
+        if (error) {
+          merged[field as keyof TValues & string] = error;
+        } else {
+          delete merged[field as keyof TValues & string];
+        }
+      }
+    }
+    return merged;
+  }
+
+  function pickFormErrors<TValues extends Record<string, unknown>>(
+    errors: FormErrors<TValues>,
+    fields: readonly (keyof TValues & string)[]
+  ): FormErrors<TValues> {
+    const picked: FormErrors<TValues> = {};
+    for (const field of fields) {
+      const error = errors[field];
+      if (error) picked[field] = error;
+    }
+    return picked;
+  }
+
+  function omitFormErrors<TValues extends Record<string, unknown>>(
+    errors: FormErrors<TValues>,
+    fields: readonly (keyof TValues & string)[]
+  ): FormErrors<TValues> {
+    const fieldSet = new Set<string>(fields);
+    const omitted: FormErrors<TValues> = {};
+    for (const [field, error] of Object.entries(errors)) {
+      if (!fieldSet.has(field) && error) {
+        omitted[field as keyof TValues & string] = error;
+      }
+    }
+    return omitted;
+  }
+
+  function formValueEqual(left: unknown, right: unknown): boolean {
+    if (Object.is(left, right)) return true;
+    if (left instanceof Date && right instanceof Date) return left.getTime() === right.getTime();
+    if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+    if (Array.isArray(left) || Array.isArray(right)) {
+      if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+      return left.every((item, index) => formValueEqual(item, right[index]));
+    }
+
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftKeys = Object.keys(leftRecord);
+    const rightKeys = Object.keys(rightRecord);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => Object.prototype.hasOwnProperty.call(rightRecord, key) && formValueEqual(leftRecord[key], rightRecord[key]));
+  }
+
+  function normalizeHandleInvalidation(resourceName: string, invalidation?: ResourceInvalidation): ResourceInvalidation {
+    if (!invalidation) return { names: [resourceName] };
+    if (isResourceTagArray(invalidation)) return { names: [resourceName], tags: invalidation };
+    return {
+      ...invalidation,
+      names: invalidation.names ?? [resourceName]
+    };
+  }
+
+  function resourceStatusMatchesFilter(status: ResourceStatus, filter: ResourceDehydrateOptions): boolean {
+    if (filter.names?.length && !filter.names.includes(status.name)) return false;
+    const tags = normalizeResourceTags(filter.tags);
+    if (tags.length > 0 && !tags.some((tag) => status.tags.includes(tag))) return false;
+    if (filter.predicate && !filter.predicate(status)) return false;
+    return true;
+  }
+
+  function getResourceDefinition<TParams = void, TData = unknown>(
+    resourceName: string
+  ): ResourceDefinition<TState, TParams, TData, unknown> {
+    const definition = resourceDefinitions.get(resourceName);
+    if (!definition) {
+      throw new ResourceError(`Resource "${resourceName}" is not registered.`, {
+        metadata: { resource: resourceName }
+      });
+    }
+    return definition as ResourceDefinition<TState, TParams, TData, unknown>;
+  }
+
+  function getResourceCacheKey<TParams, TData>(
+    resourceName: string,
+    definition: ResourceDefinition<TState, TParams, TData, unknown>,
+    params: TParams | undefined
+  ): string {
+    const rawKey = definition.key ? definition.key(params as TParams) : params;
+    return `${resourceName}:${stableResourceHash(rawKey)}`;
+  }
+
+  function ensureResourceEntry<TParams, TData>(
+    resourceName: string,
+    key: string,
+    params: TParams | undefined,
+    definition: ResourceDefinition<TState, TParams, TData, unknown>
+  ): ResourceEntry {
+    const existing = resourceEntries.get(key);
+    if (existing) return existing;
+
+    const initialData = typeof definition.initialData === "function"
+      ? (definition.initialData as (params: TParams) => TData)(params as TParams)
+      : definition.initialData;
+    const hasInitialData = initialData !== undefined;
+    const now = hasInitialData ? Date.now() : null;
+    const entry: ResourceEntry = {
+      name: resourceName,
+      key,
+      params,
+      status: hasInitialData ? "success" : "idle",
+      pending: false,
+      fetching: false,
+      stale: !hasInitialData,
+      data: initialData ?? null,
+      error: null,
+      tags: normalizeResourceTags(hasInitialData ? resolveResourceTags(definition, initialData as TData, params as TParams) : []),
+      pages: hasInitialData ? [initialData] : [],
+      pageParams: hasInitialData ? [undefined] : [],
+      startedAt: null,
+      finishedAt: now,
+      duration: null,
+      updatedAt: now,
+      controller: null,
+      inFlight: null,
+      gcTimer: null
+    };
+    resourceEntries.set(key, entry);
+    scheduleResourceGc(entry, definition);
+    return entry;
+  }
+
+  function createResourceStatus<TData, TParams>(
+    entry: ResourceEntry,
+    definition: ResourceDefinition<TState, TParams, TData, unknown>
+  ): ResourceStatus<TData, TParams> {
+    const stale = isResourceEntryStale(entry, definition);
+    const lastPage = entry.pages.length > 0 ? entry.pages[entry.pages.length - 1] as TData : entry.data as TData | null;
+    const nextPageParam = lastPage !== null && lastPage !== undefined
+      ? definition.getNextPageParam?.(lastPage, entry.pages as TData[], entry.params as TParams)
+      : undefined;
+
+    return {
+      name: entry.name,
+      key: entry.key,
+      params: entry.params as TParams,
+      status: entry.status,
+      pending: entry.pending,
+      fetching: entry.fetching,
+      stale,
+      data: (entry.data ?? null) as TData | null,
+      error: entry.error,
+      tags: [...entry.tags],
+      pages: [...entry.pages] as TData[],
+      pageParams: [...entry.pageParams],
+      hasNextPage: nextPageParam !== null && nextPageParam !== undefined,
+      startedAt: entry.startedAt,
+      finishedAt: entry.finishedAt,
+      duration: entry.duration,
+      updatedAt: entry.updatedAt
+    };
+  }
+
+  function isResourceEntryStale<TParams, TData>(
+    entry: ResourceEntry,
+    definition: ResourceDefinition<TState, TParams, TData, unknown>
+  ): boolean {
+    if (entry.stale || entry.status !== "success" || !entry.updatedAt) return true;
+    const staleTime = parseDuration(definition.staleTime ?? 0);
+    if (staleTime === Number.POSITIVE_INFINITY) return false;
+    return Date.now() - entry.updatedAt > staleTime;
+  }
+
+  function resolveResourceTags<TParams, TData>(
+    definition: ResourceDefinition<TState, TParams, TData, unknown>,
+    data: TData | null,
+    params: TParams
+  ): readonly ResourceTag[] {
+    if (!definition.tags) return [];
+    return typeof definition.tags === "function" ? definition.tags(data, params) : definition.tags;
+  }
+
+  function scheduleResourceGc<TParams, TData>(
+    entry: ResourceEntry,
+    definition: ResourceDefinition<TState, TParams, TData, unknown>
+  ): void {
+    if (entry.gcTimer) {
+      clearTimeout(entry.gcTimer);
+      entry.gcTimer = null;
+    }
+    if (definition.cacheTime === false) return;
+    const cacheTime = parseDuration(definition.cacheTime ?? "5m");
+    if (cacheTime === Number.POSITIVE_INFINITY) return;
+    entry.gcTimer = setTimeout(() => {
+      if ((resourceListeners.get(entry.key)?.size ?? 0) > 0 || entry.fetching) {
+        scheduleResourceGc(entry, definition);
+        return;
+      }
+      resourceEntries.delete(entry.key);
+      resourceListeners.delete(entry.key);
+    }, cacheTime);
+  }
+
+  function notifyResourceEntry(entry: ResourceEntry): void {
+    for (const listener of resourceListeners.get(entry.key) ?? []) {
+      listener();
+    }
+    for (const listener of resourceChangeListeners) {
+      listener();
+    }
+  }
+
+  function normalizeInvalidation(invalidation?: ResourceInvalidation): {
+    names?: readonly string[];
+    tags?: readonly ResourceTag[];
+    predicate?: (status: ResourceStatus) => boolean;
+    refetch?: boolean | "active";
+    metadata?: Record<string, unknown>;
+  } {
+    if (!invalidation) return {};
+    if (isResourceTagArray(invalidation)) return { tags: invalidation };
+    return invalidation;
+  }
+
+  function resourceEntryMatchesInvalidation(
+    entry: ResourceEntry,
+    invalidation: {
+      names?: readonly string[];
+      tags?: readonly ResourceTag[];
+      predicate?: (status: ResourceStatus) => boolean;
+    }
+  ): boolean {
+    const names = invalidation.names;
+    if (names?.length && !names.includes(entry.name)) return false;
+
+    const tags = normalizeResourceTags(invalidation.tags);
+    if (tags.length > 0 && !tags.some((tag) => entry.tags.includes(tag))) return false;
+
+    if (invalidation.predicate) {
+      const definition = resourceDefinitions.get(entry.name);
+      if (!definition) return false;
+      return invalidation.predicate(createResourceStatus(entry, definition));
+    }
+
+    return Boolean(names?.length || tags.length > 0 || !invalidation.predicate);
+  }
+
+  function cloneResourceEntries(): Map<string, ResourceEntry> {
+    const snapshot = new Map<string, ResourceEntry>();
+    for (const [key, entry] of resourceEntries) {
+      snapshot.set(key, cloneResourceEntry(entry));
+    }
+    return snapshot;
+  }
+
+  function cloneResourceEntry(entry: ResourceEntry): ResourceEntry {
+    return {
+      ...entry,
+      data: cloneState(entry.data),
+      error: entry.error,
+      tags: [...entry.tags],
+      pages: cloneState(entry.pages),
+      pageParams: cloneState(entry.pageParams),
+      controller: null,
+      inFlight: null,
+      gcTimer: null
+    };
+  }
+
+  function restoreResourceEntries(snapshot: Map<string, ResourceEntry>): void {
+    const touchedKeys = new Set([...resourceEntries.keys(), ...snapshot.keys()]);
+    for (const entry of resourceEntries.values()) {
+      if (entry.gcTimer) clearTimeout(entry.gcTimer);
+    }
+    resourceEntries.clear();
+    for (const [key, entry] of snapshot) {
+      resourceEntries.set(key, cloneResourceEntry(entry));
+    }
+    for (const key of touchedKeys) {
+      for (const listener of resourceListeners.get(key) ?? []) listener();
     }
   }
 }
@@ -1516,6 +3285,83 @@ function parseTtl(ttl: PersistOptions["ttl"]): number | null {
   const value = Number(match[1] ?? 0);
   const unit = match[2] as keyof typeof multipliers;
   return value * multipliers[unit];
+}
+
+function parseDuration(duration: number | `${number}${"ms" | "s" | "m" | "h" | "d"}`): number {
+  if (typeof duration === "number") return duration;
+  const match = duration.match(/^(\d+)(ms|s|m|h|d)$/);
+  if (!match) {
+    throw new ResourceError(`Invalid resource duration "${duration}".`, {
+      metadata: { duration }
+    });
+  }
+
+  const multipliers = {
+    ms: 1,
+    s: 1000,
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000
+  } as const;
+  const value = Number(match[1] ?? 0);
+  const unit = match[2] as keyof typeof multipliers;
+  return value * multipliers[unit];
+}
+
+function parseDurationOptional(duration: ResourcePersistOptions["ttl"]): number | null {
+  return duration === undefined ? null : parseDuration(duration);
+}
+
+function isOffline(): boolean {
+  return isBrowser() && "navigator" in window && window.navigator.onLine === false;
+}
+
+function clampIndex(index: number, length: number): number {
+  return Math.max(0, Math.min(index, length));
+}
+
+function getEntityId<TEntity, TId extends string | number>(
+  entity: TEntity,
+  selectId: EntityIdSelector<TEntity, TId>
+): TId {
+  if (typeof selectId === "function") return selectId(entity);
+  const value = (entity as Record<string, unknown>)[selectId];
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new StateMeshError(`Entity id "${selectId}" must be a string or number.`, {
+      code: "STATEMESH_ENTITY_ID_INVALID",
+      metadata: { selectId }
+    });
+  }
+  return value as TId;
+}
+
+function normalizeResourceTags(tags?: readonly ResourceTag[]): string[] {
+  return [...new Set((tags ?? []).map((tag) => {
+    if (typeof tag === "string") return tag;
+    return tag.id === undefined ? tag.type : `${tag.type}:${tag.id}`;
+  }))];
+}
+
+function isResourceTagArray(value: ResourceInvalidation): value is readonly ResourceTag[] {
+  return Array.isArray(value);
+}
+
+function stableResourceHash(value: unknown): string {
+  if (value === undefined) return "undefined";
+  return JSON.stringify(sortResourceKey(value));
+}
+
+function sortResourceKey(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortResourceKey);
+  if (!value || typeof value !== "object") return value;
+
+  const record = value as Record<string, unknown>;
+  return Object.keys(record)
+    .sort()
+    .reduce<Record<string, unknown>>((sorted, key) => {
+      sorted[key] = sortResourceKey(record[key]);
+      return sorted;
+    }, {});
 }
 
 function hasCancel(value: unknown): value is { cancel: () => void } {

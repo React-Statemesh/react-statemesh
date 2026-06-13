@@ -5,6 +5,8 @@ export default defineConfig({
     index: "src/index.ts",
     "persist/index": "src/persist/index.ts",
     "sync/index": "src/sync/index.ts",
+    "resources/index": "src/resources/index.ts",
+    "devtools/index": "src/devtools/index.ts",
     "testing/index": "src/testing/index.ts"
   },
   format: ["esm", "cjs"],

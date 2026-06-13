@@ -1,6 +1,6 @@
 # StateMesh
 
-StateMesh is a TypeScript-first, transaction-first state orchestration library for React. It starts with a small external store API, then adds the production pieces that usually become scattered across apps: named actions, optimized selectors, computed state, async transactions, optimistic UI, rollback, persistence, URL state, lightweight forms, cross-tab sync, custom errors, logger hooks, and testing helpers.
+StateMesh is a TypeScript-first, transaction-first state orchestration library for React. It starts with a small external store API, then adds the production pieces that usually become scattered across apps: named actions, optimized selectors, computed state, async transactions, optimistic UI, rollback, persistence, URL state, production forms, cross-tab sync, custom errors, logger hooks, and testing helpers.
 
 ```bash
 npm install react-statemesh
@@ -200,6 +200,166 @@ function CheckoutButton() {
 }
 ```
 
+## Resources, API Cache, And Mutations
+
+Resources are cached API/server reads owned by the mesh. They cover the production loop: API call, loading state, cache, request dedupe, invalidation, refetch, pagination, and UI sync.
+
+```ts
+import { createApiClient } from "react-statemesh";
+
+const api = createApiClient({
+  baseUrl: "/api",
+  getAccessToken: () => authStore.token,
+  refreshAuth: () => authStore.refresh(),
+  timeout: 10_000,
+  retry: {
+    attempts: 3,
+    delay: ({ attempt }) => attempt * 500,
+    retryOn: [408, 429, 500, 502, 503, 504],
+    retryNetworkErrors: true,
+    retryTimeouts: false,
+    jitter: true
+  },
+  onEvent: (event) => {
+    console.debug("[api]", event.type, event);
+  }
+});
+
+export const productsResource = mesh.resource("products.list", {
+  key: (filters: { search: string; page: number }) => ["products", filters],
+  staleTime: "1m",
+  cacheTime: "10m",
+  async fetch(filters, ctx) {
+    return api.get<Array<Product>>("/products", {
+      query: filters,
+      signal: ctx.signal
+    });
+  },
+  tags: [{ type: "products" }]
+});
+```
+
+```tsx
+function ProductList({ filters }: { filters: { search: string; page: number } }) {
+  const products = useMeshResource(productsResource, filters, {
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchInterval: 30000
+  });
+
+  if (products.pending) return <p>Loading...</p>;
+  if (products.error) return <button onClick={() => products.refetch()}>Retry</button>;
+
+  return (
+    <ul>
+      {products.data?.map((product) => <li key={product.id}>{product.name}</li>)}
+    </ul>
+  );
+}
+```
+
+Prefetch before navigation or on hover:
+
+```tsx
+<button onMouseEnter={() => void productsResource.prefetch({ search: "", page: 1 })}>
+  View products
+</button>
+```
+
+Resource cache can be dehydrated for SSR, hydrated on the client, and persisted separately from app state:
+
+```ts
+const snapshot = mesh.dehydrateResources({ tags: [{ type: "products" }] });
+mesh.hydrateResources(window.__STATEMESH_RESOURCES__);
+
+mesh.persistResources({
+  key: "shopdesk:resources",
+  storage: "localStorage",
+  names: ["products.list"],
+  ttl: "10m"
+});
+```
+
+Mutations are API/server writes with optimistic cache updates, rollback, invalidation, and refetch.
+
+```ts
+export const createProductMutation = mesh.mutation("products.create", {
+  optimistic(_state, input: { name: string }, ctx) {
+    ctx.setResourceData(productsResource, { search: "", page: 1 }, (current) => [
+      { id: "temp", name: input.name, optimistic: true },
+      ...(current ?? [])
+    ]);
+  },
+  async mutate(input) {
+    return api.post<Product>("/products", input);
+  },
+  invalidate: [{ type: "products" }],
+  refetch: "active"
+});
+```
+
+Mutations can queue while the browser is offline and flush on reconnect:
+
+```ts
+export const saveDraftMutation = mesh.mutation("draft.save", {
+  offline: true,
+  async mutate(input: DraftInput) {
+    return api.post<Draft>("/drafts", input);
+  }
+});
+
+await mesh.runQueuedMutations();
+```
+
+```tsx
+function NewProductButton() {
+  const createProduct = useMeshMutation(createProductMutation);
+  return <button disabled={createProduct.pending} onClick={() => createProduct.run({ name: "Keyboard" })}>Create</button>;
+}
+```
+
+For infinite/paginated APIs, add `getNextPageParam` and call `fetchNextPage`:
+
+```ts
+const feedResource = mesh.resource("feed.pages", {
+  async fetch(_params, ctx) {
+    return api.get<FeedPage>("/feed", { query: { cursor: String(ctx.pageParam ?? "") } });
+  },
+  getNextPageParam: (lastPage) => lastPage.nextCursor,
+  mergePages: (pages) => ({
+    items: pages.flatMap((page) => page.items),
+    nextCursor: pages.at(-1)?.nextCursor ?? null
+  }),
+  tags: ["feed"]
+});
+```
+
+`createApiClient` is the central API layer. It includes base URLs, dynamic headers, auth tokens, query params, JSON request bodies, request cancellation, timeouts, retries, normalized `ApiClientError`s, event hooks, and an auth refresh queue so concurrent `401` responses share one refresh call.
+
+Every API control can be configured globally or overridden per request:
+
+```ts
+api.get("/products", {
+  timeout: false,
+  retry: {
+    attempts: 1,
+    delay: 250,
+    retryOn: (ctx) => ctx.status === 503
+  },
+  signal: abortController.signal
+});
+```
+
+Retry is fully controllable: use a retry count, `false`, or an object with `attempts`, `delay`, `retryOn`, `retryNetworkErrors`, `retryTimeouts`, and `jitter`.
+
+For list/detail cache sync, use the built-in entity helpers:
+
+```ts
+const normalized = mesh.normalizeEntities(products, (product) => product.id);
+const merged = mesh.mergeEntities(normalized, [updatedProduct], (product) => product.id);
+const list = mesh.denormalizeEntities(merged);
+```
+
 ## Persistence
 
 Persistence is opt-in and whitelist-first.
@@ -261,36 +421,102 @@ URL state is SSR-guarded, supports push/replace mode, debounce, custom serialize
 ## Forms
 
 ```ts
+import { ApiClientError, zodSchema } from "react-statemesh";
+
+export const updateProfileMutation = mesh.mutation("profile.update", {
+  async mutate(values: { name: string; email: string }) {
+    return api.put<User>("/profile", values);
+  },
+  commit(state, user) {
+    state.user = user;
+  }
+});
+
 mesh.form("profile.form", {
   initialValues: {
     name: "",
-    email: ""
+    email: "",
+    links: [] as Array<{ url: string }>
   },
+  schema: zodSchema(profileSchema),
+  fields: {
+    name(value) {
+      return value.trim() ? null : "Name is required";
+    },
+    async email(value) {
+      if (!value.includes("@")) return "Valid email is required";
+      const available = await api.get<{ available: boolean }>("/users/email", {
+        query: { email: value }
+      });
+      return available.available ? null : "Email is already taken";
+    }
+  },
+  validateOnBlur: true,
+  clearServerErrorOnChange: true,
   validate(values) {
     return {
-      ...(values.name ? {} : { name: "Name is required" }),
-      ...(values.email.includes("@") ? {} : { email: "Valid email is required" })
+      ...(values.name.length > 80 ? { name: "Name is too long" } : {})
     };
   },
-  submit: "profile.update"
+  submit: updateProfileMutation,
+  mapServerErrors(error) {
+    const cause = (error as Error & { cause?: unknown }).cause;
+    return cause instanceof ApiClientError && cause.status === 422
+      ? { email: "Email is already taken" }
+      : {};
+  },
+  autosave: {
+    debounce: 800,
+    validate: true,
+    when: (form) => form.dirty && !form.submitting
+  },
+  steps: [
+    { name: "profile", fields: ["name"] },
+    { name: "contact", fields: ["email"] }
+  ]
 });
 ```
 
 ```tsx
 function ProfileForm() {
-  const form = useMeshForm<{ name: string; email: string }>("profile.form");
+  const form = useMeshForm<{
+    name: string;
+    email: string;
+    links: Array<{ url: string }>;
+  }>("profile.form");
 
   return (
-    <form onSubmit={form.submit}>
+    <form onSubmit={(event) => void form.submit(event).catch(() => undefined)}>
       <input {...form.field("name")} />
+      {form.touched.name && form.errors.name && <p>{form.errors.name}</p>}
       <input {...form.field("email")} />
+      {form.validatingFields.email && <p>Checking email...</p>}
+      {form.errors.email && <p>{form.errors.email}</p>}
+      {form.fieldArray("links").items.map((link, index) => (
+        <input
+          key={index}
+          value={link.url}
+          onChange={(event) => form.fieldArray("links").update(index, { url: event.target.value })}
+        />
+      ))}
+      {form.autosaving && <p>Saving draft...</p>}
       <button disabled={form.submitting}>{form.submitting ? "Saving..." : "Save"}</button>
     </form>
   );
 }
 ```
 
-Forms expose `values`, `errors`, `touched`, `dirty`, `submitting`, `submitted`, `field`, `setValue`, `setError`, `reset`, `validate`, and `submit`.
+Forms support schema adapters, form-level validation, field-level validation, async validation, server errors, dirty field tracking, field arrays, reset-to-server data, autosave, mutation/transaction submit, and multi-step flows.
+
+Useful form API:
+
+- `form.field("email")` returns input props for React fields.
+- `form.validateField("email")` runs one sync or async field validator.
+- `form.fieldArray("links")` handles append, insert, update, remove, move, and replace for dynamic arrays.
+- `form.setServerErrors({ email: "Already taken" })` stores API/server errors separately from client errors.
+- `form.resetToServer(serverProfile)` replaces values and uses that payload as the new dirty baseline.
+- `form.autosaveNow()` forces an autosave when autosave is configured.
+- `form.nextStep()`, `form.previousStep()`, and `form.goToStep("contact")` handle wizard forms.
 
 ## Cross-Tab Sync
 
@@ -323,6 +549,21 @@ Plugins have `name`, `setup`, cleanup, and event access. Duplicate plugin names 
 
 Middleware and event listeners are observational. Synchronous throws and rejected promises are isolated so analytics, logging, or devtools code cannot break state updates.
 
+For development, you can render a lightweight in-app timeline:
+
+```tsx
+import { StateMeshDevtools } from "react-statemesh/devtools";
+
+function App() {
+  return (
+    <StateMeshProvider mesh={mesh}>
+      <Routes />
+      <StateMeshDevtools mesh={mesh} />
+    </StateMeshProvider>
+  );
+}
+```
+
 ## Errors
 
 StateMesh exports a predictable error hierarchy:
@@ -335,6 +576,9 @@ StateMesh exports a predictable error hierarchy:
 - `DuplicateRegistrationError`
 - `TransactionError`
 - `TransactionRollbackError`
+- `ResourceError`
+- `MutationError`
+- `ApiClientError`
 - `PersistenceError`
 - `UrlStateError`
 - `FormError`
@@ -381,6 +625,7 @@ TypeScript React examples:
 
 - `examples/basic-counter`
 - `examples/ecommerce-cart`
+- `examples/resource-cache`
 - `examples/checkout-transaction`
 - `examples/url-filters`
 - `examples/persisted-cart`
@@ -392,6 +637,7 @@ Plain JavaScript React examples:
 
 - `examples-js/basic-counter`
 - `examples-js/ecommerce-cart`
+- `examples-js/resource-cache`
 - `examples-js/checkout-transaction`
 - `examples-js/url-filters`
 - `examples-js/persisted-cart`

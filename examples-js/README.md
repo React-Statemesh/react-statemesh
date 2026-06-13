@@ -31,6 +31,7 @@ Included examples:
 
 - `basic-counter`
 - `ecommerce-cart`
+- `resource-cache`
 - `checkout-transaction`
 - `url-filters`
 - `persisted-cart`

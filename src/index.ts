@@ -6,6 +6,7 @@ export * from "./forms";
 export * from "./url";
 export * from "./computed";
 export * from "./transactions";
+export * from "./resources";
 export * from "./devtools";
 export * from "./testing";
 export * from "./errors";

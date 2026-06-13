@@ -23,6 +23,16 @@
       "import": "./dist/sync/index.js",
       "require": "./dist/sync/index.cjs"
     },
+    "./resources": {
+      "types": "./dist/resources/index.d.ts",
+      "import": "./dist/resources/index.js",
+      "require": "./dist/resources/index.cjs"
+    },
+    "./devtools": {
+      "types": "./dist/devtools/index.d.ts",
+      "import": "./dist/devtools/index.js",
+      "require": "./dist/devtools/index.cjs"
+    },
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js",
