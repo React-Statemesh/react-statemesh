@@ -1,0 +1,1 @@
+export { createIndexedDBStorageAdapter } from "./storage";

@@ -1,0 +1,82 @@
+{
+  "name": "react-statemesh",
+  "version": "0.1.0",
+  "description": "A TypeScript-first, transaction-first state orchestration library for React.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./persist": {
+      "types": "./dist/persist/index.d.ts",
+      "import": "./dist/persist/index.js",
+      "require": "./dist/persist/index.cjs"
+    },
+    "./sync": {
+      "types": "./dist/sync/index.d.ts",
+      "import": "./dist/sync/index.js",
+      "require": "./dist/sync/index.cjs"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "require": "./dist/testing/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:types": "tsd",
+    "lint": "eslint src tests",
+    "bench": "tsx benchmarks/basic.ts",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build && pnpm test:types"
+  },
+  "keywords": [
+    "react",
+    "state",
+    "transactions",
+    "optimistic-ui",
+    "typescript",
+    "url-state",
+    "forms"
+  ],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.0",
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@typescript-eslint/eslint-plugin": "^8.34.0",
+    "@typescript-eslint/parser": "^8.34.0",
+    "eslint": "^9.29.0",
+    "jsdom": "^26.1.0",
+    "react": "^19.1.0",
+    "tsd": "^0.32.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "tsd": {
+    "directory": "test-d"
+  }
+}

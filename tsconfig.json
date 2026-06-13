@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src", "tests", "tsup.config.ts", "vitest.config.ts"],
+  "exclude": ["dist", "node_modules"]
+}
