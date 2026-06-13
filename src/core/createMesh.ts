@@ -572,9 +572,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       const wrapped = error instanceof ActionError
         ? error
         : new ActionError(`Action "${actionName}" failed.`, {
-            cause: error,
-            metadata: { action: actionName, payload: summarizePayload(payload) }
-          });
+          cause: error,
+          metadata: { action: actionName, payload: summarizePayload(payload) }
+        });
       dispatchEvent({
         type: "action.failed",
         name: actionName,
@@ -945,9 +945,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       throw finalError instanceof TransactionError
         ? finalError
         : new TransactionError(`Transaction "${transactionName}" failed.`, {
-            cause: finalError,
-            metadata: { transaction: transactionName, payload: summarizePayload(payload) }
-          });
+          cause: finalError,
+          metadata: { transaction: transactionName, payload: summarizePayload(payload) }
+        });
     } catch (error) {
       const wrapped = toError(error);
       const cancelled = runtime.cancelled || wrapped.code === "STATEMESH_TRANSACTION_CANCELLED";
@@ -959,9 +959,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       throw wrapped instanceof TransactionError
         ? wrapped
         : new TransactionError(`Transaction "${transactionName}" failed.`, {
-            cause: wrapped,
-            metadata: { transaction: transactionName, payload: summarizePayload(payload) }
-          });
+          cause: wrapped,
+          metadata: { transaction: transactionName, payload: summarizePayload(payload) }
+        });
     } finally {
       if (runtime.runId === runId) {
         runtime.controller = null;
@@ -1295,9 +1295,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
         const wrapped = error instanceof ResourceError
           ? error
           : new ResourceError(`Resource "${resourceName}" failed to fetch.`, {
-              cause: error,
-              metadata: { resource: resourceName, key }
-            });
+            cause: error,
+            metadata: { resource: resourceName, key }
+          });
         entry.status = entry.data === null || entry.data === undefined ? "error" : entry.status;
         entry.pending = false;
         entry.fetching = false;
@@ -1765,9 +1765,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       const wrapped = error instanceof MutationError
         ? error
         : new MutationError(`Mutation "${mutationName}" failed.`, {
-            cause: error,
-            metadata: { mutation: mutationName, payload: summarizePayload(payload) }
-          });
+          cause: error,
+          metadata: { mutation: mutationName, payload: summarizePayload(payload) }
+        });
 
       const shouldRollback = definition.rollback === true || (definition.rollback === undefined && Boolean(definition.optimistic));
       if (shouldRollback) {
@@ -2722,19 +2722,19 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       const mergedErrors = mergeFormErrors(entry.state.errors, mappedErrors);
       entry.state = mode === "autosave"
         ? {
-            ...entry.state,
-            autosaving: false,
-            autosaveError: formError,
-            serverErrors: { ...entry.state.serverErrors, ...mappedErrors },
-            errors: mergedErrors
-          }
+          ...entry.state,
+          autosaving: false,
+          autosaveError: formError,
+          serverErrors: { ...entry.state.serverErrors, ...mappedErrors },
+          errors: mergedErrors
+        }
         : {
-            ...entry.state,
-            submitting: false,
-            submitError: formError,
-            serverErrors: { ...entry.state.serverErrors, ...mappedErrors },
-            errors: mergedErrors
-          };
+          ...entry.state,
+          submitting: false,
+          submitError: formError,
+          serverErrors: { ...entry.state.serverErrors, ...mappedErrors },
+          errors: mergedErrors
+        };
       notifyForm(formName);
       dispatchEvent({
         type: mode === "autosave" ? "form.autosave.failed" : "form.submit.failed",

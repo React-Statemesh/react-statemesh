@@ -631,7 +631,10 @@ TypeScript React examples:
 - `examples/persisted-cart`
 - `examples/tab-sync`
 - `examples/form-submit`
+- `examples/realworld-support-desk`
 - `examples/nextjs-app`
+
+The `realworld-support-desk` example is the full production workflow reference. It combines persisted UI state, URL filters, computed state, the API client, resource cache, prefetch, SSR cache hydration, entity helpers, optimistic/offline mutations, invalidation/refetch, production forms, async validation, autosave, field arrays, multi-step form state, tab sync, logger hooks, and in-app devtools.
 
 Plain JavaScript React examples:
 
@@ -643,7 +646,10 @@ Plain JavaScript React examples:
 - `examples-js/persisted-cart`
 - `examples-js/tab-sync`
 - `examples-js/form-submit`
+- `examples-js/realworld-support-desk`
 - `examples-js/nextjs-app`
+
+The JavaScript support desk example mirrors the same app shape with `.jsx`, so teams that are not using TypeScript can copy the runtime patterns directly.
 
 ## Production Notes
 
