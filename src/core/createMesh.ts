@@ -3,6 +3,7 @@ import {
   ComputedError,
   DuplicateRegistrationError,
   FormError,
+  GuardError,
   MutationError,
   PersistenceError,
   ResourceError,
@@ -30,6 +31,12 @@ import type {
   Mesh,
   MeshAction,
   MeshActionContext,
+  MeshDehydratedSnapshot,
+  MeshDehydrateOptions,
+  MeshGuard,
+  MeshGuardContext,
+  MeshGuardTarget,
+  MeshHydrateOptions,
   MeshEvent,
   MeshMiddleware,
   MeshOptions,
@@ -43,6 +50,7 @@ import type {
   MutationContext,
   MutationDefinition,
   MutationHandle,
+  MutationQueuePersistOptions,
   MutationStatus,
   QueuedMutation,
   PersistOptions,
@@ -154,6 +162,11 @@ type PluginEntry = {
   cleanup: Unsubscribe | void;
 };
 
+type GuardEntry<TState> = {
+  target: MeshGuardTarget | null;
+  handler: MeshGuard<TState>;
+};
+
 const DEFAULT_TRANSACTION_STATUS: TransactionStatus = {
   status: "idle",
   pending: false,
@@ -213,6 +226,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   const subscriptions = new Set<Subscription<TState, unknown>>();
   const eventListeners = new Set<(event: MeshEvent) => void | Promise<void>>();
   const middlewares = new Set<MeshMiddleware<TState>>();
+  const guards = new Set<GuardEntry<TState>>();
   const snapshots = new Map<string, Snapshot<TState>>();
   const actions = new Map<string, (state: TState, payload: unknown, context: unknown) => unknown>();
   const computedEntries = new Map<string, ComputedEntry<TState, unknown>>();
@@ -230,6 +244,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   const mutationListeners = new Map<string, Set<() => void>>();
   const mutationRuntime = new Map<string, MutationRuntime>();
   const queuedMutations: QueuedMutationEntry[] = [];
+  const mutationQueueListeners = new Set<() => void>();
   const urlStates = new Map<string, UrlStateEntry<Record<string, unknown>>>();
   const formEntries = new Map<string, FormEntry<Record<string, unknown>>>();
   const pluginCleanups = new Map<string, PluginEntry>();
@@ -280,6 +295,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     dehydrateResources,
     hydrateResources,
     persistResources,
+    dehydrate,
+    hydrate,
     mutation,
     runMutation,
     getMutationStatus,
@@ -288,6 +305,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     getQueuedMutations,
     runQueuedMutations,
     clearQueuedMutations,
+    persistQueuedMutations,
     normalizeEntities,
     mergeEntities,
     removeEntities,
@@ -306,6 +324,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     snapshot,
     restore,
     middleware,
+    guard,
     use,
     onEvent,
     emit
@@ -416,6 +435,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     subscriptions.clear();
     eventListeners.clear();
     middlewares.clear();
+    guards.clear();
     snapshots.clear();
     actions.clear();
     computedEntries.clear();
@@ -438,6 +458,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     mutationDefinitions.clear();
     mutationStatuses.clear();
     mutationListeners.clear();
+    mutationQueueListeners.clear();
     for (const runtime of mutationRuntime.values()) {
       runtime.controller?.abort();
     }
@@ -526,6 +547,37 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     }
   }
 
+  function assertGuardsAllow<TPayload>(kind: "action" | "transaction" | "mutation", operationName: string, payload: TPayload): void {
+    if (guards.size === 0) return;
+
+    const context: MeshGuardContext<TState, TPayload> = {
+      kind,
+      name: operationName,
+      payload,
+      state,
+      mesh
+    };
+
+    for (const entry of guards) {
+      if (!guardTargetMatches(entry.target, context)) continue;
+      const result = entry.handler(context);
+      const allowed = result === undefined || result === true || (typeof result === "object" && result.allow !== false);
+      if (allowed) continue;
+
+      if (typeof result === "object" && result.error) throw result.error;
+      throw new GuardError(typeof result === "object" && result.reason
+        ? result.reason
+        : `StateMesh guard blocked ${kind} "${operationName}".`, {
+          metadata: {
+            mesh: name,
+            kind,
+            name: operationName,
+            ...(typeof result === "object" ? result.metadata : undefined)
+          }
+        });
+    }
+  }
+
   function action<TPayload = void, TResult = void>(
     actionName: string,
     handler: (state: TState, payload: TPayload, context: MeshActionContext<TState>) => TResult,
@@ -545,6 +597,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
         metadata: { action: actionName }
       });
     }
+    assertGuardsAllow("action", actionName, payload);
 
     const startedAt = Date.now();
     dispatchEvent({
@@ -774,6 +827,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
         metadata: { transaction: transactionName }
       });
     }
+    assertGuardsAllow("transaction", transactionName, payload);
 
     const options = transactionOptions.get(transactionName);
     const concurrency = options?.concurrency ?? "takeLatest";
@@ -1570,6 +1624,73 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     };
   }
 
+  function dehydrate(dehydrateOptions: MeshDehydrateOptions = {}): MeshDehydratedSnapshot {
+    const snapshot: MeshDehydratedSnapshot = {
+      version: 1,
+      name,
+      createdAt: Date.now()
+    };
+
+    if (dehydrateOptions.state !== false) snapshot.state = cloneState(state);
+    if (dehydrateOptions.resources !== false) snapshot.resources = dehydrateResources(dehydrateOptions);
+    if (dehydrateOptions.urlStates !== false) {
+      snapshot.urlStates = {};
+      for (const [urlName, entry] of urlStates) {
+        snapshot.urlStates[urlName] = cloneState(entry.values);
+      }
+    }
+    if (dehydrateOptions.forms) {
+      snapshot.forms = {};
+      for (const [formName, entry] of formEntries) {
+        snapshot.forms[formName] = cloneState(entry.state.values);
+      }
+    }
+    if (dehydrateOptions.queuedMutations !== false) {
+      snapshot.queuedMutations = getQueuedMutations();
+    }
+
+    return snapshot;
+  }
+
+  function hydrate(snapshot: MeshDehydratedSnapshot, hydrateOptions: MeshHydrateOptions = {}): void {
+    if (hydrateOptions.state !== false && snapshot.state !== undefined) {
+      state = hydrateOptions.mergeState
+        ? normalizeSetStateResult(snapshot.state as Partial<TState>, false)
+        : cloneState(snapshot.state as TState);
+      queueEvent({ type: "state.changed", timestamp: Date.now(), metadata: { mesh: name, source: "hydrate", ...hydrateOptions.metadata } });
+      batcher.schedule();
+    }
+
+    if (hydrateOptions.resources !== false && snapshot.resources) {
+      hydrateResources(snapshot.resources, hydrateOptions);
+    }
+
+    if (hydrateOptions.urlStates !== false && snapshot.urlStates) {
+      for (const [urlName, values] of Object.entries(snapshot.urlStates)) {
+        const entry = urlStates.get(urlName);
+        if (!entry || !values || typeof values !== "object") continue;
+        entry.values = cloneState(values as Record<string, unknown>);
+        entry.write(entry.values);
+        for (const listener of entry.listeners) listener();
+        dispatchEvent({ type: "url.changed", name: urlName, timestamp: Date.now(), metadata: { source: "hydrate", ...hydrateOptions.metadata } });
+      }
+    }
+
+    if (hydrateOptions.forms && snapshot.forms) {
+      for (const [formName, values] of Object.entries(snapshot.forms)) {
+        const entry = formEntries.get(formName);
+        if (!entry || !values || typeof values !== "object") continue;
+        resetForm(entry, formName, values as Record<string, unknown>);
+      }
+    }
+
+    if (hydrateOptions.queuedMutations !== false && snapshot.queuedMutations) {
+      restoreQueuedMutations(snapshot.queuedMutations, hydrateOptions.metadata);
+    }
+
+    dispatchEvent({ type: "mesh.hydrated", timestamp: Date.now(), metadata: { mesh: name, ...hydrateOptions.metadata } });
+  }
+
   function mutation<TPayload = void, TResult = unknown>(
     mutationName: string,
     definition: MutationDefinition<TState, TPayload, TResult>,
@@ -1643,6 +1764,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
         metadata: { mutation: mutationName }
       });
     }
+    assertGuardsAllow("mutation", mutationName, payload);
 
     if (shouldQueueMutation(definition)) {
       return queueOfflineMutation<TPayload, TResult>(mutationName, payload);
@@ -1860,6 +1982,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       const definition = mutationDefinitions.get(queued.name);
       const runtime = mutationRuntime.get(queued.name);
       updateMutationQueueSize(queued.name);
+      notifyMutationQueueChanged();
       if (!definition || !runtime) {
         const error = new MutationError(`Queued mutation "${queued.name}" is no longer registered.`, {
           metadata: { mutation: queued.name, queuedAt: queued.queuedAt }
@@ -1884,6 +2007,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
         timestamp: Date.now(),
         metadata: { mesh: name }
       });
+      notifyMutationQueueChanged();
     }
   }
 
@@ -1897,6 +2021,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       queued?.reject(queueError);
       if (queued) updateMutationQueueSize(queued.name);
     }
+    notifyMutationQueueChanged();
   }
 
   function queueOfflineMutation<TPayload, TResult>(mutationName: string, payload: TPayload): Promise<TResult> {
@@ -1911,6 +2036,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
         reject
       });
       updateMutationQueueSize(mutationName);
+      notifyMutationQueueChanged();
       dispatchEvent({
         type: "mutation.queued",
         name: mutationName,
@@ -1919,6 +2045,102 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
         metadata: { mesh: name }
       });
     });
+  }
+
+  function restoreQueuedMutations(mutations: readonly QueuedMutation[], metadata?: Record<string, unknown>): void {
+    const affectedNames = new Set<string>(queuedMutations.map((queued) => queued.name));
+    queuedMutations.length = 0;
+    for (const queued of mutations) {
+      affectedNames.add(queued.name);
+      queuedMutations.push({
+        id: queued.id,
+        name: queued.name,
+        payload: cloneState(queued.payload),
+        queuedAt: queued.queuedAt,
+        resolve: () => undefined,
+        reject: () => undefined
+      });
+    }
+    for (const mutationName of affectedNames) updateMutationQueueSize(mutationName);
+    notifyMutationQueueChanged();
+    if (mutations.length > 0) {
+      dispatchEvent({
+        type: "mutation.queue.restored",
+        count: mutations.length,
+        timestamp: Date.now(),
+        metadata: { mesh: name, ...metadata }
+      });
+    }
+  }
+
+  function persistQueuedMutations(persistOptions: MutationQueuePersistOptions = {}): Unsubscribe {
+    const storageKey = persistOptions.key ?? `${name}:mutation-queue`;
+    const serializer = persistOptions.serializer ?? JSON.stringify;
+    const deserializer = persistOptions.deserializer ?? JSON.parse;
+    const storage = resolveStorageAdapter(persistOptions.storage ?? "localStorage");
+    const version = persistOptions.version ?? 1;
+    const ttl = parseDurationOptional(persistOptions.ttl);
+
+    try {
+      const raw = storage.getItem(storageKey);
+      if (raw) {
+        const envelope = deserializer(raw) as {
+          version?: number;
+          expiresAt?: number | null;
+          queuedMutations?: QueuedMutation[];
+        };
+        if (!envelope.expiresAt || envelope.expiresAt > Date.now()) {
+          restoreQueuedMutations(envelope.queuedMutations ?? [], persistOptions.metadata);
+        } else {
+          storage.removeItem(storageKey);
+        }
+      }
+    } catch (error) {
+      const wrapped = new MutationError("StateMesh mutation queue restore failed; persisted queue was ignored.", {
+        cause: error,
+        metadata: { key: storageKey }
+      });
+      persistOptions.onError?.(wrapped);
+      dispatchEvent({ type: "mutation.queue.persist.failed", error: wrapped, timestamp: Date.now(), metadata: persistOptions.metadata });
+    }
+
+    const save = () => {
+      try {
+        const queued = getQueuedMutations();
+        storage.setItem(storageKey, serializer({
+          version,
+          updatedAt: Date.now(),
+          expiresAt: ttl ? Date.now() + ttl : null,
+          queuedMutations: queued
+        }));
+        dispatchEvent({
+          type: "mutation.queue.persisted",
+          count: queued.length,
+          timestamp: Date.now(),
+          metadata: { key: storageKey, ...persistOptions.metadata }
+        });
+      } catch (error) {
+        const wrapped = new MutationError("StateMesh mutation queue save failed.", {
+          cause: error,
+          metadata: { key: storageKey }
+        });
+        persistOptions.onError?.(wrapped);
+        dispatchEvent({ type: "mutation.queue.persist.failed", error: wrapped, timestamp: Date.now(), metadata: persistOptions.metadata });
+      }
+    };
+
+    const saveWithThrottle = persistOptions.throttle ? debounce(save, persistOptions.throttle) : save;
+    mutationQueueListeners.add(saveWithThrottle);
+    saveWithThrottle();
+
+    return () => {
+      if (hasCancel(saveWithThrottle)) saveWithThrottle.cancel();
+      mutationQueueListeners.delete(saveWithThrottle);
+    };
+  }
+
+  function notifyMutationQueueChanged(): void {
+    for (const listener of mutationQueueListeners) listener();
   }
 
   function updateMutationQueueSize(mutationName: string): void {
@@ -2251,6 +2473,17 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       });
     }
 
+    const blurField = <K extends keyof TValues & string>(fieldName: K) => {
+      entry.state = {
+        ...entry.state,
+        touched: { ...entry.state.touched, [fieldName]: true }
+      };
+      notifyForm(formName, fieldName);
+      if (entry.definition.validateOnBlur ?? Boolean(entry.definition.fields?.[fieldName])) {
+        validateFormField(entry, formName, fieldName).catch(() => undefined);
+      }
+    };
+
     const api = {
       ...entry.state,
       field: <K extends keyof TValues & string>(fieldName: K) => ({
@@ -2260,16 +2493,40 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
           const value = readFieldValue(eventOrValue);
           setFormValue(entry, formName, fieldName, value as TValues[K]);
         },
-        onBlur: () => {
-          entry.state = {
-            ...entry.state,
-            touched: { ...entry.state.touched, [fieldName]: true }
-          };
-          notifyForm(formName, fieldName);
-          if (entry.definition.validateOnBlur ?? Boolean(entry.definition.fields?.[fieldName])) {
-            validateFormField(entry, formName, fieldName).catch(() => undefined);
-          }
-        }
+        onBlur: () => blurField(fieldName)
+      }),
+      checkbox: <K extends keyof TValues & string>(fieldName: K) => ({
+        name: fieldName,
+        checked: Boolean(entry.state.values[fieldName]),
+        onChange: (eventOrValue: unknown) => {
+          setFormValue(entry, formName, fieldName, readCheckboxValue(eventOrValue) as TValues[K]);
+        },
+        onBlur: () => blurField(fieldName)
+      }),
+      radio: <K extends keyof TValues & string>(fieldName: K, value: TValues[K]) => ({
+        name: fieldName,
+        value,
+        checked: Object.is(entry.state.values[fieldName], value),
+        onChange: () => {
+          setFormValue(entry, formName, fieldName, value);
+        },
+        onBlur: () => blurField(fieldName)
+      }),
+      file: <K extends keyof TValues & string>(fieldName: K) => ({
+        name: fieldName,
+        onChange: (eventOrValue: unknown) => {
+          setFormValue(entry, formName, fieldName, readFileValue(eventOrValue) as TValues[K]);
+        },
+        onBlur: () => blurField(fieldName)
+      }),
+      select: <K extends keyof TValues & string>(fieldName: K) => ({
+        name: fieldName,
+        value: entry.state.values[fieldName],
+        onChange: (eventOrValue: unknown) => {
+          const value = readFieldValue(eventOrValue);
+          setFormValue(entry, formName, fieldName, value as TValues[K]);
+        },
+        onBlur: () => blurField(fieldName)
       }),
       setValue: <K extends keyof TValues & string>(fieldName: K, value: TValues[K]) => {
         setFormValue(entry, formName, fieldName, value);
@@ -2341,6 +2598,21 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   function middleware(handler: MeshMiddleware<TState>): Unsubscribe {
     middlewares.add(handler);
     return () => middlewares.delete(handler);
+  }
+
+  function guard(targetOrHandler: MeshGuardTarget | MeshGuard<TState>, maybeHandler?: MeshGuard<TState>): Unsubscribe {
+    const entry: GuardEntry<TState> = typeof targetOrHandler === "function" && !maybeHandler
+      ? { target: null, handler: targetOrHandler as MeshGuard<TState> }
+      : { target: targetOrHandler as MeshGuardTarget, handler: maybeHandler as MeshGuard<TState> };
+
+    if (!entry.handler) {
+      throw new GuardError("StateMesh guard requires a handler.", {
+        metadata: { mesh: name }
+      });
+    }
+
+    guards.add(entry);
+    return () => guards.delete(entry);
   }
 
   function use(plugin: MeshPlugin<TState>): Unsubscribe {
@@ -3195,6 +3467,38 @@ function readFieldValue(eventOrValue: unknown): unknown {
   return eventOrValue;
 }
 
+function readCheckboxValue(eventOrValue: unknown): boolean {
+  if (
+    eventOrValue &&
+    typeof eventOrValue === "object" &&
+    "target" in eventOrValue &&
+    eventOrValue.target &&
+    typeof eventOrValue.target === "object" &&
+    "checked" in eventOrValue.target
+  ) {
+    return Boolean((eventOrValue.target as { checked: unknown }).checked);
+  }
+
+  return Boolean(eventOrValue);
+}
+
+function readFileValue(eventOrValue: unknown): unknown {
+  if (
+    eventOrValue &&
+    typeof eventOrValue === "object" &&
+    "target" in eventOrValue &&
+    eventOrValue.target &&
+    typeof eventOrValue.target === "object" &&
+    "files" in eventOrValue.target
+  ) {
+    const files = (eventOrValue.target as { files?: FileList | null }).files;
+    if (!files) return null;
+    return files.length === 1 ? files[0] : Array.from(files);
+  }
+
+  return eventOrValue;
+}
+
 function readUrlValues<TValues extends Record<string, unknown>>(
   name: string,
   defaults: TValues,
@@ -3211,6 +3515,23 @@ function readUrlValues<TValues extends Record<string, unknown>>(
       const raw = params.get(paramName);
       if (raw === null) continue;
       values[key] = parseUrlValue(raw, defaults[key], options.serializers?.[key]);
+    }
+
+    const unknownField = getUnknownUrlField(defaults, options);
+    if (unknownField) {
+      const knownNames = new Set((Object.keys(defaults) as Array<keyof TValues & string>)
+        .filter((key) => key !== unknownField)
+        .map((key) => getUrlParamName(name, key, options)));
+      const captured: Record<string, string> = {};
+      params.forEach((value, paramName) => {
+        if (!knownNames.has(paramName) && shouldCaptureUnknownUrlParam(paramName, options.captureUnknown)) {
+          captured[paramName] = value;
+        }
+      });
+      values[unknownField] = {
+        ...(typeof defaults[unknownField] === "object" && defaults[unknownField] !== null ? defaults[unknownField] : {}),
+        ...captured
+      } as TValues[typeof unknownField];
     }
 
     return values;
@@ -3233,12 +3554,35 @@ function writeUrlValues<TValues extends Record<string, unknown>>(
     const url = new URL(window.location.href);
 
     for (const key of Object.keys(values) as Array<keyof TValues & string>) {
+      if (key === getUnknownUrlField(values, options)) continue;
       const paramName = getUrlParamName(name, key, options);
       const serialized = serializeUrlValue(values[key], options.serializers?.[key]);
       if (serialized === null || serialized === undefined || serialized === "") {
         url.searchParams.delete(paramName);
       } else {
         url.searchParams.set(paramName, serialized);
+      }
+    }
+
+    const unknownField = getUnknownUrlField(values, options);
+    if (unknownField) {
+      const unknownValues = values[unknownField];
+      const unknownRecord = unknownValues && typeof unknownValues === "object" && !Array.isArray(unknownValues)
+        ? unknownValues as Record<string, unknown>
+        : {};
+      const knownNames = new Set((Object.keys(values) as Array<keyof TValues & string>)
+        .filter((key) => key !== unknownField)
+        .map((key) => getUrlParamName(name, key, options)));
+      Array.from(url.searchParams.keys()).forEach((paramName) => {
+        if (!knownNames.has(paramName) && shouldCaptureUnknownUrlParam(paramName, options.captureUnknown)) {
+          url.searchParams.delete(paramName);
+        }
+      });
+      for (const [paramName, value] of Object.entries(unknownRecord)) {
+        const serialized = serializeUrlValue(value);
+        if (serialized !== null && serialized !== undefined && serialized !== "") {
+          url.searchParams.set(paramName, serialized);
+        }
       }
     }
 
@@ -3262,6 +3606,22 @@ function getUrlParamName<TValues extends Record<string, unknown>>(
   if (mappedName !== undefined) return mappedName;
   if (options.paramPrefix === false) return key;
   return options.paramPrefix ? `${options.paramPrefix}.${key}` : key;
+}
+
+function getUnknownUrlField<TValues extends Record<string, unknown>>(
+  values: TValues,
+  options: UrlStateOptions<TValues>
+): keyof TValues & string | null {
+  if (!options.captureUnknown) return null;
+  if (options.unknownField) return options.unknownField;
+  return Object.prototype.hasOwnProperty.call(values, "params") ? "params" as keyof TValues & string : null;
+}
+
+function shouldCaptureUnknownUrlParam(capturedName: string, capture: UrlStateOptions["captureUnknown"]): boolean {
+  if (!capture) return false;
+  if (capture === true) return true;
+  if (capture instanceof RegExp) return capture.test(capturedName);
+  return capture(capturedName);
 }
 
 function parseUrlValue<TValue>(raw: string, defaultValue: TValue, serializer?: UrlSerializer<TValue>): TValue {
@@ -3413,6 +3773,20 @@ function assertCanRegister(
   }
 
   return shouldReplace;
+}
+
+function guardTargetMatches<TState, TPayload>(
+  target: MeshGuardTarget | null,
+  context: MeshGuardContext<TState, TPayload>
+): boolean {
+  if (!target) return true;
+  if (typeof target === "string") return target === context.name;
+  if (target instanceof RegExp) return target.test(context.name);
+
+  const kindMatches = !target.kind || target.kind === context.kind;
+  const nameMatches = !target.name ||
+    (typeof target.name === "string" ? target.name === context.name : target.name.test(context.name));
+  return kindMatches && nameMatches;
 }
 
 function shouldAllowViteDevReregistration(): boolean {

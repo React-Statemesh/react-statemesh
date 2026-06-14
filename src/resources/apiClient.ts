@@ -7,6 +7,7 @@ export type ApiParseMode = "json" | "text" | "blob" | "arrayBuffer" | "response"
 /** Events emitted by the built-in API client. */
 export type ApiClientEvent =
   | { type: "api.request.started"; url: string; method: string; attempt: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "api.upload.progress"; url: string; method: string; loaded: number; total: number | null; percent: number | null; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "api.request.retrying"; url: string; method: string; attempt: number; delay: number; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "api.request.timeout"; url: string; method: string; timeout: number; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "api.request.succeeded"; url: string; method: string; status: number; duration: number; timestamp: number; metadata?: Record<string, unknown> }
@@ -14,6 +15,18 @@ export type ApiClientEvent =
   | { type: "api.auth.refresh.started"; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "api.auth.refresh.succeeded"; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "api.auth.refresh.failed"; error: unknown; timestamp: number; metadata?: Record<string, unknown> };
+
+/** Upload progress emitted by `api.upload`. */
+export type ApiUploadProgress = {
+  /** Bytes uploaded so far. */
+  loaded: number;
+  /** Total upload bytes when the browser can compute it. */
+  total: number | null;
+  /** Upload progress from 0 to 100 when total is known. */
+  percent: number | null;
+  /** Browser-native length computable flag. */
+  lengthComputable: boolean;
+};
 
 /** Context passed to API retry predicates and delay functions. */
 export type ApiRetryContext = {
@@ -95,6 +108,8 @@ export type ApiRequestOptions<TBody = unknown> = Omit<RequestInit, "body" | "hea
   retry?: number | false | ApiRetryOptions;
   /** Extra metadata included in API client events. */
   metadata?: Record<string, unknown>;
+  /** Upload progress callback. Uses XHR in browsers. */
+  onUploadProgress?: (progress: ApiUploadProgress) => void;
 };
 
 /** Built-in API client returned by `createApiClient`. */
@@ -111,6 +126,8 @@ export type ApiClient = {
   patch: <TResult = unknown, TBody = unknown>(path: string, body?: TBody, options?: ApiRequestOptions<TBody>) => Promise<TResult>;
   /** Run a DELETE request. */
   delete: <TResult = unknown>(path: string, options?: ApiRequestOptions<never>) => Promise<TResult>;
+  /** Upload a raw body, Blob, File, or FormData with optional progress events. */
+  upload: <TResult = unknown, TBody = BodyInit>(path: string, body: TBody, options?: ApiRequestOptions<TBody>) => Promise<TResult>;
 };
 
 type ResolvedRetryOptions = Required<Pick<ApiRetryOptions, "attempts" | "retryNetworkErrors" | "retryTimeouts">> &
@@ -318,6 +335,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       timeout: _timeout,
       retry: _retry,
       metadata: _metadata,
+      onUploadProgress: _onUploadProgress,
       headers: requestHeaders,
       method: _method,
       signal: _signal,
@@ -372,13 +390,159 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     await refreshPromise;
   }
 
+  async function upload<TResult = unknown, TBody = BodyInit>(
+    path: string,
+    body: TBody,
+    requestOptions: ApiRequestOptions<TBody> = {}
+  ): Promise<TResult> {
+    const method = (requestOptions.method ?? "POST").toUpperCase();
+    const url = buildUrl(options.baseUrl, path, requestOptions.query);
+
+    if (typeof XMLHttpRequest === "undefined") {
+      return request<TResult, TBody>(path, { ...requestOptions, method, body });
+    }
+
+    const startedAt = Date.now();
+    options.onEvent?.({
+      type: "api.request.started",
+      url,
+      method,
+      attempt: 1,
+      timestamp: startedAt,
+      metadata: requestOptions.metadata
+    });
+
+    try {
+      const response = await runXhrUpload<TResult, TBody>(url, method, body, requestOptions);
+      const finishedAt = Date.now();
+      options.onEvent?.({
+        type: "api.request.succeeded",
+        url,
+        method,
+        status: response.status,
+        duration: finishedAt - startedAt,
+        timestamp: finishedAt,
+        metadata: requestOptions.metadata
+      });
+      return response.data;
+    } catch (error) {
+      const wrapped = error instanceof ApiClientError ? error : normalizeApiFailure(error, url, method, 1);
+      options.onEvent?.({
+        type: "api.request.failed",
+        url,
+        method,
+        status: wrapped.status || undefined,
+        error: wrapped,
+        timestamp: Date.now(),
+        metadata: requestOptions.metadata
+      });
+      throw wrapped;
+    }
+  }
+
+  async function runXhrUpload<TResult, TBody>(
+    url: string,
+    method: string,
+    body: TBody,
+    requestOptions: ApiRequestOptions<TBody>
+  ): Promise<{ data: TResult; status: number }> {
+    const init = await buildRequestInit({ ...requestOptions, body }, method, requestOptions.signal);
+    const timeout = resolveTimeout(requestOptions.timeout, options.timeout);
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(method, url, true);
+      if (timeout) xhr.timeout = timeout;
+      if (requestOptions.parseAs === "blob") xhr.responseType = "blob";
+      if (requestOptions.parseAs === "arrayBuffer") xhr.responseType = "arraybuffer";
+
+      new Headers(init.headers).forEach((value, key) => xhr.setRequestHeader(key, value));
+
+      const abort = () => {
+        xhr.abort();
+        reject(new ApiClientError("API request was aborted.", {
+          code: "STATEMESH_API_ABORTED",
+          metadata: { url, method, aborted: true }
+        }));
+      };
+
+      requestOptions.signal?.addEventListener("abort", abort, { once: true });
+
+      xhr.upload.onprogress = (event) => {
+        const total = event.lengthComputable ? event.total : null;
+        const progress: ApiUploadProgress = {
+          loaded: event.loaded,
+          total,
+          percent: total ? Math.round((event.loaded / total) * 100) : null,
+          lengthComputable: event.lengthComputable
+        };
+        requestOptions.onUploadProgress?.(progress);
+        options.onEvent?.({
+          type: "api.upload.progress",
+          url,
+          method,
+          loaded: progress.loaded,
+          total: progress.total,
+          percent: progress.percent,
+          timestamp: Date.now(),
+          metadata: requestOptions.metadata
+        });
+      };
+
+      xhr.onload = () => {
+        requestOptions.signal?.removeEventListener("abort", abort);
+        const response = createXhrResponse(xhr);
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new ApiClientError(`API request failed with HTTP ${xhr.status}.`, {
+            status: xhr.status,
+            response,
+            metadata: { url, method, attempt: 1 }
+          }));
+          return;
+        }
+        try {
+          resolve({ status: xhr.status, data: parseXhrResponse<TResult>(xhr, requestOptions.parseAs) });
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      xhr.onerror = () => {
+        requestOptions.signal?.removeEventListener("abort", abort);
+        reject(new ApiClientError("API request failed.", {
+          code: "STATEMESH_API_CLIENT_ERROR",
+          metadata: { url, method, attempt: 1 }
+        }));
+      };
+
+      xhr.ontimeout = () => {
+        requestOptions.signal?.removeEventListener("abort", abort);
+        options.onEvent?.({
+          type: "api.request.timeout",
+          url,
+          method,
+          timeout: timeout ?? 0,
+          timestamp: Date.now(),
+          metadata: requestOptions.metadata
+        });
+        reject(new ApiClientError("API request timed out.", {
+          code: "STATEMESH_API_TIMEOUT",
+          metadata: { url, method, timeout }
+        }));
+      };
+
+      xhr.send(init.body as XMLHttpRequestBodyInit | null | undefined);
+    });
+  }
+
   return {
     request,
     get: (path, requestOptions) => request(path, { ...requestOptions, method: "GET" }),
     post: (path, body, requestOptions) => request(path, { ...requestOptions, method: "POST", body }),
     put: (path, body, requestOptions) => request(path, { ...requestOptions, method: "PUT", body }),
     patch: (path, body, requestOptions) => request(path, { ...requestOptions, method: "PATCH", body }),
-    delete: (path, requestOptions) => request(path, { ...requestOptions, method: "DELETE" })
+    delete: (path, requestOptions) => request(path, { ...requestOptions, method: "DELETE" }),
+    upload
   };
 }
 
@@ -392,13 +556,36 @@ function mergeHeaders(target: Headers, source?: HeadersInit): void {
 }
 
 function buildUrl(baseUrl: string | undefined, path: string, query?: ApiRequestOptions["query"]): string {
-  const url = new URL(path, baseUrl ?? "http://statemesh.local");
+  const pathIsAbsolute = isAbsoluteUrl(path);
+  const url = pathIsAbsolute
+    ? new URL(path)
+    : baseUrl
+      ? new URL(path.replace(/^\/+/, ""), new URL(ensureTrailingSlash(baseUrl), getUrlOrigin()))
+      : new URL(path, getUrlOrigin());
+
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value === null || value === undefined) continue;
     url.searchParams.set(key, String(value));
   }
-  if (!baseUrl && path.startsWith("/")) return `${url.pathname}${url.search}${url.hash}`;
+
+  if (!pathIsAbsolute && (!baseUrl || !isAbsoluteUrl(baseUrl))) {
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+
   return url.toString();
+}
+
+function getUrlOrigin(): string {
+  if (typeof window !== "undefined" && window.location?.origin) return window.location.origin;
+  return "http://statemesh.local";
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value : `${value}/`;
+}
+
+function isAbsoluteUrl(value: string): boolean {
+  return /^[a-z][a-z\d+\-.]*:/i.test(value);
 }
 
 async function parseResponse<TResult>(response: Response, parseAs?: ApiParseMode): Promise<TResult> {
@@ -414,6 +601,39 @@ async function parseResponse<TResult>(response: Response, parseAs?: ApiParseMode
   }
 
   return response.text() as Promise<TResult>;
+}
+
+function parseXhrResponse<TResult>(xhr: XMLHttpRequest, parseAs?: ApiParseMode): TResult {
+  if (parseAs === "response") return createXhrResponse(xhr) as TResult;
+  if (parseAs === "void" || xhr.status === 204) return undefined as TResult;
+  if (parseAs === "blob" || parseAs === "arrayBuffer") return xhr.response as TResult;
+  if (parseAs === "text") return xhr.responseText as TResult;
+
+  const contentType = xhr.getResponseHeader("Content-Type") ?? "";
+  if (parseAs === "json" || contentType.includes("application/json")) {
+    return JSON.parse(xhr.responseText || "null") as TResult;
+  }
+
+  return xhr.responseText as TResult;
+}
+
+function createXhrResponse(xhr: XMLHttpRequest): Response {
+  return new Response(xhr.response ?? xhr.responseText, {
+    status: xhr.status,
+    statusText: xhr.statusText,
+    headers: parseXhrHeaders(xhr.getAllResponseHeaders())
+  });
+}
+
+function parseXhrHeaders(rawHeaders: string): Headers {
+  const headers = new Headers();
+  for (const line of rawHeaders.trim().split(/[\r\n]+/)) {
+    if (!line) continue;
+    const index = line.indexOf(":");
+    if (index <= 0) continue;
+    headers.set(line.slice(0, index).trim(), line.slice(index + 1).trim());
+  }
+  return headers;
 }
 
 function resolveTimeout(requestTimeout: number | false | undefined, globalTimeout: number | undefined): number | null {

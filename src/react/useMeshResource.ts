@@ -9,7 +9,7 @@ import type {
 import { useMesh } from "./useMesh";
 
 /** Options for `useMeshResource`. */
-export type UseMeshResourceOptions = ResourceFetchOptions & {
+export type UseMeshResourceOptions<TParams = void, TData = unknown, TSelected = TData> = ResourceFetchOptions & {
   /** Fetch automatically on mount when the entry is idle or stale. Defaults to true. */
   auto?: boolean;
   /** Disable all automatic fetching when false. Defaults to true. */
@@ -24,20 +24,26 @@ export type UseMeshResourceOptions = ResourceFetchOptions & {
   refetchInterval?: number | false;
   /** Continue polling while the tab is hidden. Defaults to false. */
   refetchIntervalInBackground?: boolean;
+  /** Keep the previous hook data visible while a new params entry loads. Defaults to false. */
+  keepPreviousData?: boolean;
+  /** Placeholder data used while the resource has no data yet. */
+  placeholderData?: TData | ((previousData: TData | null, params: TParams | undefined) => TData);
+  /** Select a derived value from resource data for this component. */
+  select?: (data: TData | null) => TSelected;
 };
 
 /** Value returned by `useMeshResource`. */
-export type UseMeshResourceResult<TParams = void, TData = unknown> = ResourceStatus<TData, TParams> & {
+export type UseMeshResourceResult<TParams = void, TData = unknown, TCacheData = TData> = ResourceStatus<TData, TParams> & {
   /** Fetch this resource again. */
-  refetch: (options?: ResourceFetchOptions) => Promise<TData>;
+  refetch: (options?: ResourceFetchOptions) => Promise<TCacheData>;
   /** Warm the cache without forcing a network call when data is fresh. */
-  prefetch: (options?: ResourceFetchOptions) => Promise<TData>;
+  prefetch: (options?: ResourceFetchOptions) => Promise<TCacheData>;
   /** Fetch the next page for pagination/infinite resources. */
-  fetchNextPage: (options?: ResourceFetchOptions) => Promise<TData>;
+  fetchNextPage: (options?: ResourceFetchOptions) => Promise<TCacheData>;
   /** Mark matching resources stale, optionally refetching. */
   invalidate: (invalidation?: ResourceInvalidation) => Promise<void>;
   /** Write cached data manually. */
-  setData: (updater: TData | ((current: TData | null) => TData), options?: ResourceSetDataOptions) => void;
+  setData: (updater: TCacheData | ((current: TCacheData | null) => TCacheData), options?: ResourceSetDataOptions) => void;
 };
 
 /**
@@ -48,15 +54,16 @@ export type UseMeshResourceResult<TParams = void, TData = unknown> = ResourceSta
  * const products = useMeshResource(productsResource, filters, { staleTime: "1m" });
  * ```
  */
-export function useMeshResource<TParams = void, TData = unknown, TState = unknown>(
+export function useMeshResource<TParams = void, TData = unknown, TState = unknown, TSelected = TData>(
   nameOrResource: string | ResourceHandle<TParams, TData>,
   params?: TParams,
-  options: UseMeshResourceOptions = {}
-): UseMeshResourceResult<TParams, TData> {
+  options: UseMeshResourceOptions<TParams, TData, TSelected> = {}
+): UseMeshResourceResult<TParams, TSelected, TData> {
   const mesh = useMesh<TState>();
   const resourceName = typeof nameOrResource === "string" ? nameOrResource : nameOrResource.resourceName;
   const paramsKey = stableHookHash(params);
   const lastStatusRef = useRef<ResourceStatus<TData, TParams> | null>(null);
+  const lastDataRef = useRef<TData | null>(null);
 
   const subscribe = useCallback(
     (listener: () => void) => mesh.subscribeResource(resourceName, listener, { params }),
@@ -72,6 +79,13 @@ export function useMeshResource<TParams = void, TData = unknown, TState = unknow
   }, [mesh, resourceName, paramsKey]);
 
   const status = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  if (status.data !== null && status.data !== undefined) {
+    lastDataRef.current = status.data;
+  }
+  const displayStatus = useMemo(
+    () => applyResourceDisplayOptions<TParams, TData, TSelected>(status, params, lastDataRef.current, options),
+    [status, paramsKey, options.keepPreviousData, options.placeholderData, options.select]
+  );
   const enabled = options.enabled ?? true;
   const auto = options.auto ?? true;
   const forceOnMount = options.refetchOnMount ?? false;
@@ -156,7 +170,7 @@ export function useMeshResource<TParams = void, TData = unknown, TState = unknow
 
   return useMemo(
     () => ({
-      ...status,
+      ...displayStatus,
       refetch: (fetchOptions?: ResourceFetchOptions) =>
         mesh.fetchResource<TParams, TData>(resourceName, params, { ...options, ...fetchOptions, force: true }),
       prefetch: (fetchOptions?: ResourceFetchOptions) =>
@@ -168,8 +182,35 @@ export function useMeshResource<TParams = void, TData = unknown, TState = unknow
       setData: (updater: TData | ((current: TData | null) => TData), setOptions?: ResourceSetDataOptions) =>
         mesh.setResourceData<TData, TParams>(resourceName, params, updater, setOptions)
     }),
-    [mesh, resourceName, paramsKey, status]
+    [mesh, resourceName, paramsKey, displayStatus]
   );
+}
+
+function applyResourceDisplayOptions<TParams, TData, TSelected>(
+  status: ResourceStatus<TData, TParams>,
+  params: TParams | undefined,
+  previousData: TData | null,
+  options: UseMeshResourceOptions<TParams, TData, TSelected>
+): ResourceStatus<TSelected, TParams> {
+  let data: TData | null = status.data;
+  if ((data === null || data === undefined) && options.keepPreviousData && previousData !== null) {
+    data = previousData;
+  }
+  if ((data === null || data === undefined) && options.placeholderData !== undefined) {
+    data = typeof options.placeholderData === "function"
+      ? (options.placeholderData as (previousData: TData | null, params: TParams | undefined) => TData)(previousData, params)
+      : options.placeholderData;
+  }
+
+  const selected = options.select ? options.select(data) : data as TSelected | null;
+  const selectedPages = options.select
+    ? status.pages.map((page) => options.select?.(page) as TSelected)
+    : status.pages as unknown as TSelected[];
+  return {
+    ...status,
+    data: selected as TSelected | null,
+    pages: selectedPages
+  };
 }
 
 function normalizeHookInvalidation(resourceName: string, invalidation?: ResourceInvalidation): ResourceInvalidation {

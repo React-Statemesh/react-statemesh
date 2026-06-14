@@ -12,3 +12,9 @@
 - Adds a Vite development full-reload guard in `StateMeshProvider` so broken saves do not leave the last successful UI visible.
 - Treats duplicate named registrations as replacements during Vite browser HMR while keeping production duplicate guards strict.
 - Adds custom URL query parameter names for `mesh.urlState` through `paramNames` maps and resolver functions.
+- Adds resource UI helpers for `keepPreviousData`, `placeholderData`, and per-component `select` transforms in `useMeshResource`.
+- Adds guarded operations with `mesh.guard`, `GuardError`, full mesh `dehydrate`/`hydrate`, dynamic URL param capture, persisted offline mutation queues, and error helper utilities.
+- Adds API upload support with `api.upload`, upload progress callbacks, and relative API base URL joining such as `baseUrl: "/api"`.
+- Adds checkbox, radio, select, and file helpers to production forms.
+- Adds DevTools timeline search, category filters, failed-only view, and export/copy support.
+- Adds tested TypeScript and plain JavaScript production-upgrades examples for the new daily-app APIs.

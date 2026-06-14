@@ -262,6 +262,16 @@ function ProductList({ filters }: { filters: { search: string; page: number } })
 }
 ```
 
+For smoother search, pagination, and dashboard UIs, the hook can keep previous data visible, provide placeholder data, and select a component-specific shape without rewriting the shared cache:
+
+```tsx
+const productNames = useMeshResource(productsResource, filters, {
+  keepPreviousData: true,
+  placeholderData: [],
+  select: (products) => (products ?? []).map((product) => product.name)
+});
+```
+
 Prefetch before navigation or on hover:
 
 ```tsx
@@ -312,6 +322,12 @@ export const saveDraftMutation = mesh.mutation("draft.save", {
   }
 });
 
+mesh.persistQueuedMutations({
+  key: "shopdesk:mutation-queue",
+  storage: "localStorage",
+  ttl: "1d"
+});
+
 await mesh.runQueuedMutations();
 ```
 
@@ -338,6 +354,20 @@ const feedResource = mesh.resource("feed.pages", {
 });
 ```
 
+For full app restore, SSR payloads, tests, or migrations, dehydrate and hydrate the whole mesh:
+
+```ts
+const snapshot = mesh.dehydrate({
+  forms: true
+});
+
+mesh.hydrate(snapshot, {
+  mergeState: true,
+  resources: true,
+  queuedMutations: true
+});
+```
+
 `createApiClient` is the central API layer. It includes base URLs, dynamic headers, auth tokens, query params, JSON request bodies, request cancellation, timeouts, retries, normalized `ApiClientError`s, event hooks, and an auth refresh queue so concurrent `401` responses share one refresh call.
 
 Every API control can be configured globally or overridden per request:
@@ -355,6 +385,21 @@ api.get("/products", {
 ```
 
 Retry is fully controllable: use a retry count, `false`, or an object with `attempts`, `delay`, `retryOn`, `retryNetworkErrors`, `retryTimeouts`, and `jitter`.
+
+Relative API bases work naturally in frontend apps. `baseUrl: "/api"` with `api.get("/products")` sends `/api/products`.
+
+Uploads can send `FormData`, `File`, `Blob`, or other browser bodies without forcing JSON, and can report upload progress:
+
+```ts
+const formData = new FormData();
+formData.append("avatar", file);
+
+await api.upload<User>("/profile/avatar", formData, {
+  onUploadProgress(progress) {
+    console.log(progress.percent);
+  }
+});
+```
 
 For list/detail cache sync, use the built-in entity helpers:
 
@@ -460,6 +505,23 @@ mesh.urlState("products.filters", defaults, {
 
 `paramNames` takes priority over `paramPrefix`; unmapped fields still fall back to `paramPrefix` or the field name.
 
+Dynamic query params can be captured into one object field when the app supports user-defined filters:
+
+```ts
+mesh.urlState("products.filters", {
+  search: "",
+  params: {} as Record<string, string>
+}, {
+  paramNames: {
+    search: "q"
+  },
+  captureUnknown: /^filter_/,
+  unknownField: "params"
+});
+```
+
+`/products?q=keyboard&filter_brand=keychron` becomes `{ search: "keyboard", params: { filter_brand: "keychron" } }`.
+
 ## Forms
 
 ```ts
@@ -553,12 +615,20 @@ Forms support schema adapters, form-level validation, field-level validation, as
 Useful form API:
 
 - `form.field("email")` returns input props for React fields.
+- `form.checkbox("alerts")`, `form.radio("plan", "pro")`, `form.select("country")`, and `form.file("avatar")` return safe props for common input types.
 - `form.validateField("email")` runs one sync or async field validator.
 - `form.fieldArray("links")` handles append, insert, update, remove, move, and replace for dynamic arrays.
 - `form.setServerErrors({ email: "Already taken" })` stores API/server errors separately from client errors.
 - `form.resetToServer(serverProfile)` replaces values and uses that payload as the new dirty baseline.
 - `form.autosaveNow()` forces an autosave when autosave is configured.
 - `form.nextStep()`, `form.previousStep()`, and `form.goToStep("contact")` handle wizard forms.
+
+```tsx
+<input type="checkbox" {...form.checkbox("alerts")} />
+<input type="radio" {...form.radio("plan", "enterprise")} />
+<select {...form.select("country")} />
+<input type="file" {...form.file("avatar")} />
+```
 
 ## Cross-Tab Sync
 
@@ -591,6 +661,17 @@ Plugins have `name`, `setup`, cleanup, and event access. Duplicate plugin names 
 
 Middleware and event listeners are observational. Synchronous throws and rejected promises are isolated so analytics, logging, or devtools code cannot break state updates.
 
+Guards are different from middleware: they can intentionally stop an action, transaction, or mutation before it runs.
+
+```ts
+const stopGuard = mesh.guard({ kind: "action", name: /^admin\./ }, ({ state }) => ({
+  allow: state.user.role === "admin",
+  reason: "Admin access is required."
+}));
+```
+
+When a guard blocks an operation, StateMesh throws `GuardError` before mutating state or starting the API effect.
+
 For development, you can render a lightweight in-app timeline:
 
 ```tsx
@@ -605,6 +686,8 @@ function App() {
   );
 }
 ```
+
+The DevTools timeline supports event search, category filtering, failed-only filtering, and JSON export/copy for bug reports.
 
 ## Errors
 
@@ -621,12 +704,28 @@ StateMesh exports a predictable error hierarchy:
 - `ResourceError`
 - `MutationError`
 - `ApiClientError`
+- `GuardError`
 - `PersistenceError`
 - `UrlStateError`
 - `FormError`
 - `SyncError`
 
 Each error includes `name`, `code`, `cause`, `metadata`, and `timestamp`.
+
+Small helpers are included for UI-safe error handling:
+
+```ts
+import { getErrorMessage, getErrorMetadata, getErrorStatus, isApiClientError } from "react-statemesh";
+
+try {
+  await products.refetch();
+} catch (error) {
+  console.error(getErrorMessage(error), getErrorStatus(error), getErrorMetadata(error));
+  if (isApiClientError(error) && error.status === 401) {
+    redirectToLogin();
+  }
+}
+```
 
 ## Testing
 
@@ -674,9 +773,12 @@ TypeScript React examples:
 - `examples/tab-sync`
 - `examples/form-submit`
 - `examples/realworld-support-desk`
+- `examples/production-upgrades`
 - `examples/nextjs-app`
 
 The `realworld-support-desk` example is the full production workflow reference. It combines persisted UI state, URL filters, computed state, the API client, resource cache, prefetch, SSR cache hydration, entity helpers, optimistic/offline mutations, invalidation/refetch, production forms, async validation, autosave, field arrays, multi-step form state, tab sync, logger hooks, and in-app devtools.
+
+The `production-upgrades` example focuses on the newer daily-app helpers: resource `keepPreviousData`/`placeholderData`/`select`, relative API bases, URL dynamic param capture, action guards, and checkbox/radio/select/file form helpers.
 
 Plain JavaScript React examples:
 
@@ -689,6 +791,7 @@ Plain JavaScript React examples:
 - `examples-js/tab-sync`
 - `examples-js/form-submit`
 - `examples-js/realworld-support-desk`
+- `examples-js/production-upgrades`
 - `examples-js/nextjs-app`
 
 The JavaScript support desk example mirrors the same app shape with `.jsx`, so teams that are not using TypeScript can copy the runtime patterns directly.

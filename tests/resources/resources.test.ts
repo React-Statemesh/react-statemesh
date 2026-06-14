@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApiClient, createMesh, MutationError } from "../../src";
 
 type AppState = {
@@ -23,6 +23,10 @@ function deferred<T>() {
 }
 
 describe("resources", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("dedupes concurrent requests and serves fresh cache", async () => {
     const mesh = createAppMesh();
     const first = deferred<Array<{ id: string }>>();
@@ -230,6 +234,81 @@ describe("resources", () => {
     }
   });
 
+  it("persists and restores queued offline mutations", async () => {
+    const originalOnline = Object.getOwnPropertyDescriptor(window.navigator, "onLine");
+    const storage = new Map<string, string>();
+    const adapter = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key)
+    };
+
+    try {
+      Object.defineProperty(window.navigator, "onLine", { configurable: true, value: false });
+      const first = createAppMesh();
+      first.mutation("todos.create", {
+        offline: true,
+        async mutate(payload: { title: string }) {
+          return { id: "1", title: payload.title };
+        },
+        commit(state, todo) {
+          state.todos.push(todo);
+        }
+      });
+      const unsubscribe = first.persistQueuedMutations({ key: "queue", storage: adapter });
+      void first.runMutation("todos.create", { title: "Persisted" }).catch(() => undefined);
+      expect(first.getQueuedMutations()).toHaveLength(1);
+      unsubscribe();
+
+      Object.defineProperty(window.navigator, "onLine", { configurable: true, value: true });
+      const restored = createAppMesh();
+      restored.mutation("todos.create", {
+        offline: true,
+        async mutate(payload: { title: string }) {
+          return { id: "1", title: payload.title };
+        },
+        commit(state, todo) {
+          state.todos.push(todo);
+        }
+      });
+      restored.persistQueuedMutations({ key: "queue", storage: adapter });
+
+      expect(restored.getQueuedMutations()).toHaveLength(1);
+      await restored.runQueuedMutations();
+      expect(restored.getQueuedMutations()).toHaveLength(0);
+      expect(restored.getState().todos).toEqual([{ id: "1", title: "Persisted" }]);
+    } finally {
+      if (originalOnline) Object.defineProperty(window.navigator, "onLine", originalOnline);
+    }
+  });
+
+  it("dehydrates and hydrates full mesh snapshots with resources and queued mutations", async () => {
+    const mesh = createAppMesh();
+    mesh.resource("todos.list", {
+      async fetch() {
+        return [{ id: "1", title: "Cached" }];
+      },
+      tags: ["todos"]
+    });
+    await mesh.fetchResource("todos.list");
+    mesh.setPath("todos", [{ id: "local", title: "Local" }]);
+
+    const snapshot = mesh.dehydrate();
+    const restored = createAppMesh();
+    restored.resource("todos.list", {
+      async fetch() {
+        return [{ id: "2", title: "Fresh" }];
+      },
+      tags: ["todos"]
+    });
+    restored.hydrate(snapshot);
+
+    expect(restored.getState().todos).toEqual([{ id: "local", title: "Local" }]);
+    expect(restored.getResourceStatus<Array<{ id: string; title: string }>>("todos.list").data).toEqual([
+      { id: "1", title: "Cached" }
+    ]);
+  });
+
   it("normalizes, merges, removes, and denormalizes entities", () => {
     const mesh = createAppMesh();
 
@@ -252,6 +331,20 @@ describe("resources", () => {
 });
 
 describe("createApiClient", () => {
+  it("joins relative base URLs with request paths", async () => {
+    let requestedUrl = "";
+    const api = createApiClient({
+      baseUrl: "/api",
+      async fetcher(input) {
+        requestedUrl = String(input);
+        return Response.json({ ok: true });
+      }
+    });
+
+    await expect(api.get("/todos", { query: { search: "key" } })).resolves.toEqual({ ok: true });
+    expect(requestedUrl).toBe("/api/todos?search=key");
+  });
+
   it("queues auth refresh and retries concurrent unauthorized requests once", async () => {
     let token = "old";
     let refreshes = 0;
@@ -353,5 +446,47 @@ describe("createApiClient", () => {
       code: "STATEMESH_API_TIMEOUT"
     });
     expect(requests).toBe(2);
+  });
+
+  it("uploads with progress through XMLHttpRequest", async () => {
+    const progress: number[] = [];
+    let sentBody: XMLHttpRequestBodyInit | null | undefined;
+
+    class FakeXMLHttpRequest {
+      upload: { onprogress?: (event: ProgressEvent) => void } = {};
+      status = 200;
+      statusText = "OK";
+      responseText = "{\"ok\":true}";
+      response: unknown = undefined;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      timeout = 0;
+
+      open = vi.fn();
+      setRequestHeader = vi.fn();
+      abort = vi.fn();
+      getResponseHeader = (name: string) => name.toLowerCase() === "content-type" ? "application/json" : null;
+      getAllResponseHeaders = () => "Content-Type: application/json\r\n";
+      send = (body?: XMLHttpRequestBodyInit | null) => {
+        sentBody = body;
+        this.upload.onprogress?.({ loaded: 5, total: 10, lengthComputable: true } as ProgressEvent);
+        this.onload?.();
+      };
+    }
+
+    vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest);
+    const api = createApiClient({ baseUrl: "https://api.example.test" });
+    const body = new FormData();
+    body.append("file", new Blob(["hello"]), "hello.txt");
+
+    await expect(api.upload("/files", body, {
+      onUploadProgress(event) {
+        if (event.percent !== null) progress.push(event.percent);
+      }
+    })).resolves.toEqual({ ok: true });
+
+    expect(sentBody).toBe(body);
+    expect(progress).toEqual([50]);
   });
 });

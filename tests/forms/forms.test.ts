@@ -107,6 +107,54 @@ describe("forms", () => {
     expect(mesh.getForm<{ email: string }>("profile.form").errors.email).toBeUndefined();
   });
 
+  it("provides checkbox, radio, file, and select field helpers", async () => {
+    const mesh = createMesh({ state: {} });
+    mesh.form("preferences.form", {
+      initialValues: {
+        accepted: false,
+        plan: "free",
+        avatar: null as File | File[] | null,
+        country: ""
+      },
+      fields: {
+        accepted(value) {
+          return value ? null : "Must accept";
+        }
+      }
+    });
+
+    const form = mesh.getForm<{
+      accepted: boolean;
+      plan: string;
+      avatar: File | File[] | null;
+      country: string;
+    }>("preferences.form");
+
+    form.checkbox("accepted").onChange({ target: { checked: true } });
+    form.radio("plan", "pro").onChange();
+    const avatar = new File(["avatar"], "avatar.png", { type: "image/png" });
+    form.file("avatar").onChange({ target: { files: [avatar] } });
+    form.select("country").onChange({ target: { value: "IN" } });
+
+    const values = mesh.getForm<{
+      accepted: boolean;
+      plan: string;
+      avatar: File | File[] | null;
+      country: string;
+    }>("preferences.form").values;
+
+    expect(values.accepted).toBe(true);
+    expect(values.plan).toBe("pro");
+    expect(values.avatar).toBe(avatar);
+    expect(values.country).toBe("IN");
+    expect(mesh.getForm("preferences.form").dirty).toBe(true);
+
+    mesh.getForm<{ accepted: boolean }>("preferences.form").checkbox("accepted").onChange(false);
+    mesh.getForm<{ accepted: boolean }>("preferences.form").checkbox("accepted").onBlur();
+    await Promise.resolve();
+    expect(mesh.getForm<{ accepted: boolean }>("preferences.form").errors.accepted).toBe("Must accept");
+  });
+
   it("ignores stale async field validation results", async () => {
     const mesh = createMesh({ state: {} });
     const pending: Array<{ value: string; resolve: (error: string | null) => void }> = [];

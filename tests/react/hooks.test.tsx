@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createMesh,
@@ -91,6 +92,86 @@ describe("React hooks", () => {
     await waitFor(() => expect(screen.getByText("todos:1")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "add" }));
     await waitFor(() => expect(screen.getByText("todos:2")).toBeTruthy());
+  });
+
+  it("supports resource placeholder data and selectors", async () => {
+    const mesh = createMesh({ state: {} });
+    let resolveTodos!: (todos: Array<{ id: string; title: string }>) => void;
+    const todosResource = mesh.resource("todos.selected", {
+      async fetch() {
+        return new Promise<Array<{ id: string; title: string }>>((resolve) => {
+          resolveTodos = resolve;
+        });
+      }
+    });
+
+    function Todos() {
+      const todos = useMeshResource(todosResource, undefined, {
+        placeholderData: [{ id: "placeholder", title: "Placeholder" }],
+        select: (data) => data?.map((todo) => todo.title).join(", ") ?? "none"
+      });
+
+      return <span>{todos.data}</span>;
+    }
+
+    render(
+      <StateMeshProvider mesh={mesh}>
+        <Todos />
+      </StateMeshProvider>
+    );
+
+    expect(screen.getByText("Placeholder")).toBeTruthy();
+    await waitFor(() => expect(resolveTodos).toBeTypeOf("function"));
+    await act(async () => {
+      resolveTodos([{ id: "1", title: "Real" }]);
+    });
+    await waitFor(() => expect(screen.getByText("Real")).toBeTruthy());
+  });
+
+  it("keeps previous resource data while new params load", async () => {
+    const mesh = createMesh({ state: {} });
+    const resolvers = new Map<number, (value: { page: number; title: string }) => void>();
+    const pagesResource = mesh.resource("todos.pages.selected", {
+      async fetch(params: { page: number }) {
+        return new Promise<{ page: number; title: string }>((resolve) => {
+          resolvers.set(params.page, resolve);
+        });
+      }
+    });
+
+    function Todos() {
+      const [page, setPage] = useState(1);
+      const todos = useMeshResource(pagesResource, { page }, {
+        keepPreviousData: true
+      });
+
+      return (
+        <section>
+          <span>{todos.data?.title ?? "loading"}</span>
+          <button onClick={() => setPage(2)}>next</button>
+        </section>
+      );
+    }
+
+    render(
+      <StateMeshProvider mesh={mesh}>
+        <Todos />
+      </StateMeshProvider>
+    );
+
+    await waitFor(() => expect(resolvers.get(1)).toBeTruthy());
+    await act(async () => {
+      resolvers.get(1)?.({ page: 1, title: "Page 1" });
+    });
+    await waitFor(() => expect(screen.getByText("Page 1")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "next" }));
+    expect(screen.getByText("Page 1")).toBeTruthy();
+    await waitFor(() => expect(resolvers.get(2)).toBeTruthy());
+    await act(async () => {
+      resolvers.get(2)?.({ page: 2, title: "Page 2" });
+    });
+    await waitFor(() => expect(screen.getByText("Page 2")).toBeTruthy());
   });
 
   it("supports reconnect refetch, focus refetch, and prefetch from hooks", async () => {

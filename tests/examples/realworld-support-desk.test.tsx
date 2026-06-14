@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import ProductionUpgradesApp, { createProductionUpgradesExample, type Filters as ProductFilters } from "../../examples/production-upgrades/src/App";
 import App from "../../examples/realworld-support-desk/src/App";
 import {
   createSupportDeskExample,
@@ -11,6 +12,73 @@ import {
 } from "../../examples/realworld-support-desk/src/state";
 
 describe("realworld support desk example", () => {
+  afterEach(() => {
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("uses the production upgrade APIs together", async () => {
+    const example = createProductionUpgradesExample();
+
+    example.mesh.setUrlState("products.filters", {
+      search: "key",
+      dynamic: {
+        filter_stock: "in"
+      }
+    });
+
+    const keyboard = await example.productsResource.fetch(example.mesh.getUrlState<ProductFilters>("products.filters"));
+    expect(keyboard.map((product) => product.name)).toEqual(["Keyboard"]);
+
+    example.exportReport();
+    expect(example.mesh.getState().exports).toBe(1);
+
+    const form = example.mesh.getForm("settings.form");
+    form.checkbox("alerts").onChange({ target: { checked: false } });
+    form.radio("plan", "enterprise").onChange();
+    form.select("country").onChange({ target: { value: "US" } });
+
+    expect(form.checkbox("alerts").checked).toBe(false);
+    expect(form.radio("plan", "enterprise").checked).toBe(true);
+    expect(form.select("country").value).toBe("US");
+  });
+
+  it("renders the production upgrades React example", async () => {
+    render(<ProductionUpgradesApp />);
+
+    await waitFor(() => expect(screen.getByText("Keyboard")).toBeTruthy());
+    expect(screen.getByText("Laptop Stand")).toBeTruthy();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search products" }), {
+      target: { value: "mouse" }
+    });
+
+    await waitFor(() => expect(screen.getByText("Mouse")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Alerts" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Enterprise" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Country" }), {
+      target: { value: "US" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Export report" }));
+
+    expect(screen.getByRole("button", { name: "Save settings" })).toBeTruthy();
+  });
+
+  it("renders the plain JavaScript production upgrades example", async () => {
+    window.history.replaceState(null, "", "/");
+    // @ts-expect-error The JavaScript example is intentionally authored as .jsx.
+    const { default: JavaScriptApp } = await import("../../examples-js/production-upgrades/src/App.jsx");
+
+    render(<JavaScriptApp />);
+
+    await waitFor(() => expect(screen.getByText("Keyboard")).toBeTruthy());
+    fireEvent.change(screen.getByRole("textbox", { name: "Search products" }), {
+      target: { value: "stand" }
+    });
+
+    await waitFor(() => expect(screen.getByText("Laptop Stand")).toBeTruthy());
+  });
+
   it("fetches tickets, normalizes entities, and hydrates the resource cache", async () => {
     const example = createSupportDeskExample({ registerPlugins: false });
     const stopPersisting = example.persistResourceCache();

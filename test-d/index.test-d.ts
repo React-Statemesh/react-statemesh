@@ -1,8 +1,16 @@
 import { expectType } from "tsd";
 import {
+  GuardError,
   createApiClient,
   createMesh,
+  getErrorMessage,
+  getErrorMetadata,
+  getErrorStatus,
+  isApiClientError,
+  isStateMeshError,
+  type ApiUploadProgress,
   type ApiRetryOptions,
+  type MeshDehydratedSnapshot,
   type QueuedMutation,
   type ResourceFetchOptions,
   type ResourceSnapshot,
@@ -64,10 +72,21 @@ expectType<Array<{ id: string; title: string }> | null>(products.data);
 expectType<(options?: ResourceFetchOptions) => Promise<Array<{ id: string; title: string }>>>(products.refetch);
 expectType<(options?: ResourceFetchOptions) => Promise<Array<{ id: string; title: string }>>>(products.prefetch);
 expectType<Promise<Array<{ id: string; title: string }>>>(mesh.prefetchResource("products.list", { search: "key" }));
+const productTitles = useMeshResource(productsResource, { search: "key" }, {
+  keepPreviousData: true,
+  placeholderData: [],
+  select(data) {
+    return (data ?? []).map((product) => product.title);
+  }
+});
+expectType<string[] | null>(productTitles.data);
 const resourceSnapshot = mesh.dehydrateResources({ names: ["products.list"] });
 expectType<ResourceSnapshot>(resourceSnapshot);
 expectType<void>(mesh.hydrateResources(resourceSnapshot));
 expectType<() => void>(mesh.persistResources({ names: ["products.list"] }));
+const meshSnapshot = mesh.dehydrate({ forms: true });
+expectType<MeshDehydratedSnapshot>(meshSnapshot);
+expectType<void>(mesh.hydrate(meshSnapshot, { mergeState: true }));
 
 const createProduct = mesh.mutation("products.create", {
   async mutate(payload: { title: string }) {
@@ -80,6 +99,12 @@ expectType<(payload: { title: string }) => Promise<{ id: string; title: string }
 expectType<QueuedMutation[]>(mesh.getQueuedMutations());
 expectType<Promise<void>>(mesh.runQueuedMutations());
 expectType<void>(mesh.clearQueuedMutations());
+expectType<() => void>(mesh.persistQueuedMutations({ storage: "memory" }));
+
+expectType<() => void>(mesh.guard({ kind: "action", name: "cart.add" }, (context) => {
+  expectType<"light" | "dark">(context.state.theme);
+  return true;
+}));
 
 const productsById = mesh.normalizeEntities([
   { id: "1", title: "Keyboard" }
@@ -108,6 +133,14 @@ mesh.urlState("products.generatedFilters", {
     expectType<string>(urlStateName);
     return `filter_${field}`;
   }
+});
+
+mesh.urlState("products.dynamicFilters", {
+  search: "",
+  params: {} as Record<string, string>
+}, {
+  captureUnknown: /^filter_/,
+  unknownField: "params"
 });
 
 const [urlFilters, setUrlFilters] = useMeshUrlState<{ search: string; page: number; sale: boolean }>("products.filters");
@@ -158,8 +191,34 @@ expectType<void>(profileForm.resetToServer({ name: "Ada", email: "ada@example.te
 expectType<Promise<void>>(profileForm.autosaveNow());
 expectType<Promise<boolean>>(profileForm.nextStep());
 
+mesh.form("settings.form", {
+  initialValues: {
+    alerts: true,
+    plan: "pro" as "pro" | "enterprise",
+    country: "IN",
+    avatar: null as File | null
+  }
+});
+
+const settingsForm = mesh.getForm<{
+  alerts: boolean;
+  plan: "pro" | "enterprise";
+  country: string;
+  avatar: File | null;
+}>("settings.form");
+expectType<boolean>(settingsForm.checkbox("alerts").checked);
+expectType<"pro" | "enterprise">(settingsForm.radio("plan", "pro").value);
+expectType<string>(settingsForm.select("country").value);
+expectType<void>(settingsForm.file("avatar").onChange(new File(["hello"], "hello.txt")));
+
 const api = createApiClient({ baseUrl: "https://api.example.test" });
 expectType<Promise<{ ok: boolean }>>(api.get<{ ok: boolean }>("/health"));
+expectType<Promise<{ ok: boolean }>>(api.upload<{ ok: boolean }>("/files", new FormData(), {
+  onUploadProgress(progress) {
+    expectType<ApiUploadProgress>(progress);
+    expectType<number | null>(progress.percent);
+  }
+}));
 
 const retryOptions: ApiRetryOptions = {
   attempts: 2,
@@ -173,3 +232,16 @@ expectType<Promise<{ ok: boolean }>>(controlledApi.post<{ ok: boolean }, { name:
   timeout: false,
   retry: false
 }));
+
+const guardError = new GuardError("Blocked", { metadata: { action: "cart.add" } });
+expectType<GuardError>(guardError);
+const unknownError: unknown = guardError;
+expectType<string>(getErrorMessage(unknownError));
+expectType<number | null>(getErrorStatus(unknownError));
+expectType<Record<string, unknown> | null>(getErrorMetadata(unknownError));
+if (isStateMeshError(unknownError)) {
+  expectType<string>(unknownError.code);
+}
+if (isApiClientError(unknownError)) {
+  expectType<number>(unknownError.status);
+}

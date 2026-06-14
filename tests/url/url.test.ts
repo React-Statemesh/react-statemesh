@@ -73,6 +73,39 @@ describe("URL state", () => {
     expect(window.location.search).toContain("filter_page=3");
   });
 
+  it("captures dynamic unknown query params into a configured field", () => {
+    window.history.replaceState(null, "", "/products?search=keyboard&filter_brand=acme&filter_rating=4&ignored=true");
+    const mesh = createMesh({ state: { ready: true } });
+
+    mesh.urlState("products.filters", {
+      search: "",
+      dynamic: {} as Record<string, string>
+    }, {
+      captureUnknown: /^filter_/,
+      unknownField: "dynamic"
+    });
+
+    expect(mesh.getUrlState<{ search: string; dynamic: Record<string, string> }>("products.filters")).toEqual({
+      search: "keyboard",
+      dynamic: {
+        filter_brand: "acme",
+        filter_rating: "4"
+      }
+    });
+
+    mesh.setUrlState("products.filters", {
+      dynamic: {
+        filter_brand: "contoso",
+        filter_stock: "in"
+      }
+    });
+
+    expect(window.location.search).toContain("filter_brand=contoso");
+    expect(window.location.search).toContain("filter_stock=in");
+    expect(window.location.search).not.toContain("filter_rating=");
+    expect(window.location.search).toContain("ignored=true");
+  });
+
   it("guards duplicate URL state registrations and allows explicit replacement", () => {
     window.history.replaceState(null, "", "/products");
     const mesh = createMesh({ state: { ready: true } });

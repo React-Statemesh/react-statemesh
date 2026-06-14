@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { ActionError, ComputedError, DuplicateRegistrationError, createMesh } from "../../src";
+import { ActionError, ComputedError, DuplicateRegistrationError, GuardError, createMesh } from "../../src";
 
 type AppState = {
   theme: "light" | "dark";
@@ -86,6 +86,49 @@ describe("createMesh core store", () => {
     expect(() => mesh.setPath("theme", "dark")).not.toThrow();
     await Promise.resolve();
     expect(mesh.getState().theme).toBe("dark");
+  });
+
+  it("blocks guarded operations before they mutate state", async () => {
+    const mesh = createAppMesh();
+    mesh.action("cart.addItem", (state, product: { id: string; name: string; price: number }) => {
+      state.cart.items.push({ ...product, quantity: 1 });
+    });
+    mesh.transaction("cart.checkout", {
+      optimistic(state) {
+        state.cart.status = "processing";
+      },
+      async effect() {
+        return { id: "order_1", total: 100 };
+      }
+    });
+
+    mesh.guard({ kind: "action", name: "cart.addItem" }, ({ state }) => ({
+      allow: Boolean(state.user),
+      reason: "Login required"
+    }));
+    mesh.guard(/^cart\./, ({ kind }) => kind === "transaction" ? false : true);
+
+    expect(() => mesh.runAction("cart.addItem", { id: "keyboard", name: "Keyboard", price: 100 })).toThrow(GuardError);
+    expect(mesh.getState().cart.items).toHaveLength(0);
+    expect(() => mesh.runTransaction("cart.checkout", undefined)).toThrow(GuardError);
+    expect(mesh.getState().cart.status).toBe("idle");
+
+    mesh.setPath("user", { name: "Ada" });
+    expect(() => mesh.runAction("cart.addItem", { id: "keyboard", name: "Keyboard", price: 100 })).not.toThrow();
+    expect(mesh.getState().cart.items).toHaveLength(1);
+  });
+
+  it("dehydrates and hydrates mesh state", () => {
+    const mesh = createAppMesh();
+    mesh.setPath("theme", "dark");
+    mesh.setPath("user", { name: "Ada" });
+
+    const snapshot = mesh.dehydrate({ resources: false, urlStates: false, queuedMutations: false });
+    const restored = createAppMesh();
+    restored.hydrate(snapshot);
+
+    expect(restored.getState().theme).toBe("dark");
+    expect(restored.getState().user).toEqual({ name: "Ada" });
   });
 });
 

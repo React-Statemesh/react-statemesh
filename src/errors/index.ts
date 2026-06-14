@@ -13,3 +13,5 @@ export * from "./SyncError";
 export * from "./ResourceError";
 export * from "./MutationError";
 export * from "./ApiClientError";
+export * from "./GuardError";
+export * from "./helpers";

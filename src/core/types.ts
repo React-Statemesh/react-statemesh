@@ -73,11 +73,60 @@ export type MeshEvent =
   | { type: "resource.persist.failed"; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "mutation.started"; name: string; payload?: unknown; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "mutation.queued"; name: string; payload?: unknown; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.queue.restored"; count: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.queue.persisted"; count: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.queue.persist.failed"; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "mutation.queue.flushed"; count: number; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "mutation.optimistic"; name: string; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "mutation.succeeded"; name: string; duration: number; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "mutation.rollback"; name: string; timestamp: number; metadata?: Record<string, unknown> }
-  | { type: "mutation.failed"; name: string; error: unknown; timestamp: number; metadata?: Record<string, unknown> };
+  | { type: "mutation.failed"; name: string; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mesh.hydrated"; timestamp: number; metadata?: Record<string, unknown> };
+
+/** Runtime operation kinds that can be guarded before execution. */
+export type MeshGuardKind = "action" | "transaction" | "mutation";
+
+/** A guard target can match by name, RegExp, or operation kind/name pair. */
+export type MeshGuardTarget = string | RegExp | {
+  /** Limit the guard to one operation kind. Omit to match all operation kinds. */
+  kind?: MeshGuardKind;
+  /** Match an operation name exactly or with a RegExp. Omit to match all names. */
+  name?: string | RegExp;
+};
+
+/** Context passed to a guard before an action, transaction, or mutation runs. */
+export type MeshGuardContext<TState = unknown, TPayload = unknown> = {
+  /** Operation kind. */
+  kind: MeshGuardKind;
+  /** Registered operation name. */
+  name: string;
+  /** Payload passed to the operation. */
+  payload: TPayload;
+  /** Current state at guard time. */
+  state: TState;
+  /** Current mesh instance. */
+  mesh: Mesh<TState>;
+};
+
+/** A guard can return false or `{ allow: false }` to block an operation. */
+export type MeshGuardResult =
+  | void
+  | boolean
+  | {
+      /** Whether the operation should run. */
+      allow: boolean;
+      /** Optional human-readable block reason. */
+      reason?: string;
+      /** Optional error to throw instead of a generated guard error. */
+      error?: Error;
+      /** Extra metadata for the generated guard error. */
+      metadata?: Record<string, unknown>;
+    };
+
+/** Guard function used by `mesh.guard`. */
+export type MeshGuard<TState = unknown, TPayload = unknown> = (
+  context: MeshGuardContext<TState, TPayload>
+) => MeshGuardResult;
 
 /**
  * Middleware observes action, transaction, persistence, sync, form, URL, and state events.
@@ -378,6 +427,9 @@ export type UrlParamNames<TValues extends Record<string, unknown> = Record<strin
   | Partial<Record<keyof TValues & string, string>>
   | ((field: keyof TValues & string, urlStateName: string) => string);
 
+/** Dynamic query params can be captured into one object field. */
+export type UrlUnknownParamCapture = boolean | RegExp | ((paramName: string) => boolean);
+
 /** Configuration for `mesh.urlState`. */
 export type UrlStateOptions<TValues extends Record<string, unknown> = Record<string, unknown>> = {
   /** Allow replacing an existing URL state registration with the same name. */
@@ -390,6 +442,10 @@ export type UrlStateOptions<TValues extends Record<string, unknown> = Record<str
   paramPrefix?: string | false;
   /** Custom query parameter names. Takes priority over `paramPrefix`. */
   paramNames?: UrlParamNames<TValues>;
+  /** Capture unknown query params into an object field. */
+  captureUnknown?: UrlUnknownParamCapture;
+  /** Field that stores captured unknown params. Defaults to `"params"` when present. */
+  unknownField?: keyof TValues & string;
   /** Per-field URL serializers. */
   serializers?: Partial<{ [K in keyof TValues]: UrlSerializer<TValues[K]> }>;
 };
@@ -531,10 +587,57 @@ export type FormFieldProps<TValue = unknown> = {
   onBlur: () => void;
 };
 
+/** Props returned by `form.checkbox(name)` for checkbox inputs and toggles. */
+export type FormCheckboxProps = {
+  /** Field name. */
+  name: string;
+  /** Current checked state. */
+  checked: boolean;
+  /** Accepts a browser change event or a raw boolean. */
+  onChange: (eventOrValue: unknown) => void;
+  /** Marks the field as touched. */
+  onBlur: () => void;
+};
+
+/** Props returned by `form.radio(name, value)` for radio inputs. */
+export type FormRadioProps<TValue = unknown> = {
+  /** Field name. */
+  name: string;
+  /** Radio option value. */
+  value: TValue;
+  /** True when the form value matches this radio option. */
+  checked: boolean;
+  /** Selects this radio value. */
+  onChange: () => void;
+  /** Marks the field as touched. */
+  onBlur: () => void;
+};
+
+/** Props returned by `form.file(name)` for file inputs. */
+export type FormFileProps = {
+  /** Field name. */
+  name: string;
+  /** Accepts a browser file change event or a `File`, `FileList`, or `File[]`. */
+  onChange: (eventOrValue: unknown) => void;
+  /** Marks the field as touched. */
+  onBlur: () => void;
+};
+
+/** Props returned by `form.select(name)` for select inputs. */
+export type FormSelectProps<TValue = unknown> = FormFieldProps<TValue>;
+
 /** Runtime form API returned by `mesh.getForm` and `useMeshForm`. */
 export type FormApi<TValues extends Record<string, unknown> = Record<string, unknown>> = FormState<TValues> & {
   /** Return input props for one field. */
   field: <K extends keyof TValues & string>(name: K) => FormFieldProps<TValues[K]>;
+  /** Return checkbox props for a boolean field. */
+  checkbox: <K extends keyof TValues & string>(name: K) => FormCheckboxProps;
+  /** Return radio props for one option of a field. */
+  radio: <K extends keyof TValues & string>(name: K, value: TValues[K]) => FormRadioProps<TValues[K]>;
+  /** Return file input props for a file field. */
+  file: <K extends keyof TValues & string>(name: K) => FormFileProps;
+  /** Return select props for one field. */
+  select: <K extends keyof TValues & string>(name: K) => FormSelectProps<TValues[K]>;
   /** Set one field value and mark the form dirty. */
   setValue: <K extends keyof TValues & string>(name: K, value: TValues[K]) => void;
   /** Return helpers for an array field. */
@@ -806,6 +909,80 @@ export type ResourcePersistOptions = ResourceDehydrateOptions & {
   metadata?: Record<string, unknown>;
 };
 
+/** Serializable full mesh snapshot for SSR, tests, app restore, or migrations. */
+export type MeshDehydratedSnapshot = {
+  /** Snapshot schema version. */
+  version: number;
+  /** Mesh name at snapshot time. */
+  name: string;
+  /** Snapshot creation timestamp. */
+  createdAt: number;
+  /** Cloned app state. */
+  state?: unknown;
+  /** Dehydrated resource cache. */
+  resources?: ResourceSnapshot;
+  /** Registered URL state values by name. */
+  urlStates?: Record<string, unknown>;
+  /** Registered form values by name. */
+  forms?: Record<string, unknown>;
+  /** Offline queued mutations. */
+  queuedMutations?: QueuedMutation[];
+};
+
+/** Options for `mesh.dehydrate`. */
+export type MeshDehydrateOptions = ResourceDehydrateOptions & {
+  /** Include app state. Defaults to true. */
+  state?: boolean;
+  /** Include resource cache. Defaults to true. */
+  resources?: boolean;
+  /** Include URL state values. Defaults to true. */
+  urlStates?: boolean;
+  /** Include form values. Defaults to false. */
+  forms?: boolean;
+  /** Include queued offline mutations. Defaults to true. */
+  queuedMutations?: boolean;
+};
+
+/** Options for `mesh.hydrate`. */
+export type MeshHydrateOptions = ResourceHydrateOptions & {
+  /** Hydrate app state. Defaults to true. */
+  state?: boolean;
+  /** Shallow-merge state instead of replacing it. Defaults to false. */
+  mergeState?: boolean;
+  /** Hydrate resource cache. Defaults to true. */
+  resources?: boolean;
+  /** Hydrate registered URL states. Defaults to true. */
+  urlStates?: boolean;
+  /** Hydrate registered forms. Defaults to false. */
+  forms?: boolean;
+  /** Hydrate queued offline mutations. Defaults to true. */
+  queuedMutations?: boolean;
+  /** Extra metadata emitted with hydration events. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Persistence options for the offline mutation queue. */
+export type MutationQueuePersistOptions = {
+  /** Storage key. Defaults to `${mesh.name}:mutation-queue`. */
+  key?: string;
+  /** Built-in storage name or a custom adapter. */
+  storage?: PersistStorageName | StorageAdapter;
+  /** Persisted schema version. */
+  version?: number;
+  /** Expire persisted queue after a duration. */
+  ttl?: MeshDuration;
+  /** Serialize the persistence envelope. Defaults to `JSON.stringify`. */
+  serializer?: (value: unknown) => string;
+  /** Deserialize the persistence envelope. Defaults to `JSON.parse`. */
+  deserializer?: (value: string) => unknown;
+  /** Throttle writes in milliseconds. */
+  throttle?: number;
+  /** Called when restore/save fails. */
+  onError?: (error: Error) => void;
+  /** Extra metadata emitted with queue persistence events. */
+  metadata?: Record<string, unknown>;
+};
+
 /** Normalized entity collection used by `mesh.normalizeEntities`. */
 export type EntityCollection<TEntity, TId extends string | number = string | number> = {
   /** Entity records by id. */
@@ -1073,6 +1250,10 @@ export type Mesh<TState = unknown> = {
   hydrateResources: (snapshot: ResourceSnapshot, options?: ResourceHydrateOptions) => void;
   /** Persist selected resource cache entries to storage. */
   persistResources: (options?: ResourcePersistOptions) => Unsubscribe;
+  /** Serialize state, resources, URL state, forms, and queued mutations. */
+  dehydrate: (options?: MeshDehydrateOptions) => MeshDehydratedSnapshot;
+  /** Restore a full mesh snapshot. */
+  hydrate: (snapshot: MeshDehydratedSnapshot, options?: MeshHydrateOptions) => void;
   /** Register an API/server mutation. */
   mutation: <TPayload = void, TResult = unknown>(
     name: string,
@@ -1093,6 +1274,8 @@ export type Mesh<TState = unknown> = {
   runQueuedMutations: () => Promise<void>;
   /** Clear queued offline mutations. */
   clearQueuedMutations: (error?: Error) => void;
+  /** Persist and restore the offline mutation queue. */
+  persistQueuedMutations: (options?: MutationQueuePersistOptions) => Unsubscribe;
   /** Normalize entities into `{ byId, allIds }`. */
   normalizeEntities: <TEntity, TId extends string | number = string | number>(
     entities: readonly TEntity[],
@@ -1148,6 +1331,11 @@ export type Mesh<TState = unknown> = {
   restore: (snapshotId: string) => void;
   /** Register middleware for events. */
   middleware: (handler: MeshMiddleware<TState>) => Unsubscribe;
+  /** Register a guard that can block actions, transactions, or mutations before they run. */
+  guard: {
+    (handler: MeshGuard<TState>): Unsubscribe;
+    (target: MeshGuardTarget, handler: MeshGuard<TState>): Unsubscribe;
+  };
   /** Register a plugin. Duplicate plugin names throw. */
   use: (plugin: MeshPlugin<TState>) => Unsubscribe;
   /** Subscribe to all StateMesh events. */
