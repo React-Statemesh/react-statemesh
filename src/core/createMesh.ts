@@ -3257,6 +3257,9 @@ function getUrlParamName<TValues extends Record<string, unknown>>(
   key: keyof TValues & string,
   options: UrlStateOptions<TValues>
 ): string {
+  if (typeof options.paramNames === "function") return options.paramNames(key, name);
+  const mappedName = options.paramNames?.[key];
+  if (mappedName !== undefined) return mappedName;
   if (options.paramPrefix === false) return key;
   return options.paramPrefix ? `${options.paramPrefix}.${key}` : key;
 }

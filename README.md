@@ -402,6 +402,12 @@ mesh.urlState("products.filters", {
   category: "all",
   page: 1,
   sort: "latest"
+}, {
+  paramNames: {
+    search: "q",
+    category: "cat",
+    page: "p"
+  }
 });
 ```
 
@@ -421,6 +427,38 @@ function ProductFilters() {
 ```
 
 URL state is SSR-guarded, supports push/replace mode, debounce, custom serializers, numbers, booleans, arrays, and back/forward updates.
+
+Use `paramNames` when the URL should use API/product-friendly names instead of state field names:
+
+```ts
+mesh.urlState("products.filters", {
+  search: "",
+  page: 1,
+  sale: false
+}, {
+  paramNames: {
+    search: "q",
+    page: "p",
+    sale: "available"
+  }
+});
+```
+
+That reads and writes URLs like:
+
+```txt
+/products?q=keyboard&p=2&available=true
+```
+
+For fully custom naming, use a resolver function:
+
+```ts
+mesh.urlState("products.filters", defaults, {
+  paramNames: (field) => `filter_${field}`
+});
+```
+
+`paramNames` takes priority over `paramPrefix`; unmapped fields still fall back to `paramPrefix` or the field name.
 
 ## Forms
 

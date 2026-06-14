@@ -11,7 +11,8 @@ import {
   useMeshAction,
   useMeshMutation,
   useMeshResource,
-  useMeshTransaction
+  useMeshTransaction,
+  useMeshUrlState
 } from "../dist/index";
 
 const mesh = createMesh({
@@ -85,6 +86,33 @@ const productsById = mesh.normalizeEntities([
 ], (product) => product.id);
 expectType<{ byId: Record<string, { id: string; title: string }>; allIds: string[] }>(productsById);
 expectType<Array<{ id: string; title: string }>>(mesh.denormalizeEntities(productsById));
+
+mesh.urlState("products.filters", {
+  search: "",
+  page: 1,
+  sale: false
+}, {
+  paramNames: {
+    search: "q",
+    page: "p",
+    sale: "available"
+  }
+});
+
+mesh.urlState("products.generatedFilters", {
+  search: "",
+  page: 1
+}, {
+  paramNames(field, urlStateName) {
+    expectType<"search" | "page">(field);
+    expectType<string>(urlStateName);
+    return `filter_${field}`;
+  }
+});
+
+const [urlFilters, setUrlFilters] = useMeshUrlState<{ search: string; page: number; sale: boolean }>("products.filters");
+expectType<string>(urlFilters.search);
+expectType<void>(setUrlFilters({ page: 2 }));
 
 const updateProfile = mesh.mutation("profile.update", {
   async mutate(payload: { name: string; email: string }) {

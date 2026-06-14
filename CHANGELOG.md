@@ -11,3 +11,4 @@
 - Adds tested real-world support desk examples for TypeScript and plain JavaScript React.
 - Adds a Vite development full-reload guard in `StateMeshProvider` so broken saves do not leave the last successful UI visible.
 - Treats duplicate named registrations as replacements during Vite browser HMR while keeping production duplicate guards strict.
+- Adds custom URL query parameter names for `mesh.urlState` through `paramNames` maps and resolver functions.

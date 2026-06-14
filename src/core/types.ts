@@ -373,6 +373,11 @@ export type UrlSerializer<TValue = unknown> = {
   serialize: (value: TValue) => string | null;
 };
 
+/** Per-field URL query parameter names, or a resolver for fully custom naming. */
+export type UrlParamNames<TValues extends Record<string, unknown> = Record<string, unknown>> =
+  | Partial<Record<keyof TValues & string, string>>
+  | ((field: keyof TValues & string, urlStateName: string) => string);
+
 /** Configuration for `mesh.urlState`. */
 export type UrlStateOptions<TValues extends Record<string, unknown> = Record<string, unknown>> = {
   /** Allow replacing an existing URL state registration with the same name. */
@@ -383,6 +388,8 @@ export type UrlStateOptions<TValues extends Record<string, unknown> = Record<str
   debounce?: number;
   /** Prefix query params, or use `false` to use field names directly. */
   paramPrefix?: string | false;
+  /** Custom query parameter names. Takes priority over `paramPrefix`. */
+  paramNames?: UrlParamNames<TValues>;
   /** Per-field URL serializers. */
   serializers?: Partial<{ [K in keyof TValues]: UrlSerializer<TValues[K]> }>;
 };

@@ -23,6 +23,56 @@ describe("URL state", () => {
     expect(window.location.search).toContain("page=1");
   });
 
+  it("supports custom query parameter names", () => {
+    window.history.replaceState(null, "", "/products?q=keyboards&p=2&available=true");
+    const mesh = createMesh({ state: { ready: true } });
+
+    mesh.urlState("products.filters", {
+      search: "",
+      page: 1,
+      sale: false
+    }, {
+      paramNames: {
+        search: "q",
+        page: "p",
+        sale: "available"
+      }
+    });
+
+    expect(mesh.getUrlState("products.filters")).toEqual({
+      search: "keyboards",
+      page: 2,
+      sale: true
+    });
+
+    mesh.setUrlState("products.filters", { search: "mice", page: 1, sale: false });
+    expect(window.location.search).toContain("q=mice");
+    expect(window.location.search).toContain("p=1");
+    expect(window.location.search).toContain("available=false");
+    expect(window.location.search).not.toContain("search=");
+  });
+
+  it("supports generated query parameter names", () => {
+    window.history.replaceState(null, "", "/products?filter_search=keyboards&filter_page=2");
+    const mesh = createMesh({ state: { ready: true } });
+
+    mesh.urlState("products.filters", {
+      search: "",
+      page: 1
+    }, {
+      paramNames: (field) => `filter_${field}`
+    });
+
+    expect(mesh.getUrlState("products.filters")).toEqual({
+      search: "keyboards",
+      page: 2
+    });
+
+    mesh.setUrlState("products.filters", { search: "mice", page: 3 });
+    expect(window.location.search).toContain("filter_search=mice");
+    expect(window.location.search).toContain("filter_page=3");
+  });
+
   it("guards duplicate URL state registrations and allows explicit replacement", () => {
     window.history.replaceState(null, "", "/products");
     const mesh = createMesh({ state: { ready: true } });
