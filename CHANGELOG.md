@@ -9,3 +9,5 @@
 - Adds production form upgrades: async field validation, server errors, autosave, mutation submit, dirty fields, reset-to-server data, schema adapters, and field arrays.
 - Adds resource prefetch aliases, focus/reconnect refetch, polling, resource cache dehydration/hydration, resource cache persistence, offline mutation queueing, entity cache helpers, and an in-app DevTools timeline component.
 - Adds tested real-world support desk examples for TypeScript and plain JavaScript React.
+- Adds a Vite development full-reload guard in `StateMeshProvider` so broken saves do not leave the last successful UI visible.
+- Treats duplicate named registrations as replacements during Vite browser HMR while keeping production duplicate guards strict.

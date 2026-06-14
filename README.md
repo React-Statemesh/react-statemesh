@@ -39,6 +39,8 @@ export function App() {
 
 The provider only passes the mesh instance through React context. State reads use `useSyncExternalStore`, so updating `theme` does not rerender unrelated consumers.
 
+In Vite development, `StateMeshProvider` forces a full browser reload on hot-update errors by default. This prevents Fast Refresh from leaving the last successful UI visible after a broken save, so missing imports and wrong runtime names fail immediately on save. StateMesh also treats repeated named registrations during Vite HMR as replacements, so re-saving a module that registers `cart.addItem` does not throw a development-only duplicate registration error. Disable the reload guard with `<StateMeshProvider mesh={mesh} devForceFullReload={false}>` when you prefer normal Fast Refresh behavior.
+
 ## Core API
 
 ```ts
@@ -112,6 +114,8 @@ mesh.computed("cart.total", totalDefinition, { replace: true });
 mesh.form("profile.form", profileFormDefinition, { replace: true });
 mesh.urlState("products.filters", filterDefaults, { replace: true });
 ```
+
+During Vite browser HMR, duplicate named registrations are automatically treated like `{ replace: true }` so hot updates can re-run action/form/resource setup files safely. Production builds still reject accidental duplicates, and non-Vite environments should use explicit `{ replace: true }` when replacing a registration intentionally.
 
 ## Selectors And Computed State
 

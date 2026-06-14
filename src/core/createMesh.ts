@@ -150,6 +150,10 @@ type FormEntry<TValues extends Record<string, unknown>> = {
   autosave: { (): void; cancel: () => void } | null;
 };
 
+type PluginEntry = {
+  cleanup: Unsubscribe | void;
+};
+
 const DEFAULT_TRANSACTION_STATUS: TransactionStatus = {
   status: "idle",
   pending: false,
@@ -228,7 +232,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   const queuedMutations: QueuedMutationEntry[] = [];
   const urlStates = new Map<string, UrlStateEntry<Record<string, unknown>>>();
   const formEntries = new Map<string, FormEntry<Record<string, unknown>>>();
-  const pluginCleanups = new Map<string, Unsubscribe | void>();
+  const pluginCleanups = new Map<string, PluginEntry>();
   const pendingEvents: MeshEvent[] = [];
 
   const batcher = createBatcher(() => {
@@ -455,8 +459,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       entry.listeners.clear();
     }
     formEntries.clear();
-    for (const cleanup of pluginCleanups.values()) {
-      cleanup?.();
+    for (const entry of pluginCleanups.values()) {
+      entry.cleanup?.();
     }
     pluginCleanups.clear();
   }
@@ -697,16 +701,16 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     definition: TransactionDefinition<TState, TPayload, TResult>,
     options: TransactionRegistrationOptions = {}
   ): TransactionHandle<TPayload, TResult> {
-    assertCanRegister(transactionDefinitions, "transaction", transactionName, options.replace);
+    const replace = assertCanRegister(transactionDefinitions, "transaction", transactionName, options.replace);
     const existingRuntime = transactionRuntime.get(transactionName);
-    if (existingRuntime && options.replace) {
+    if (existingRuntime && replace) {
       existingRuntime.cancelled = true;
       existingRuntime.controller?.abort();
     }
     transactionDefinitions.set(transactionName, definition as TransactionDefinition<TState, unknown, unknown>);
     transactionOptions.set(transactionName, {
       concurrency: options.concurrency ?? "takeLatest",
-      replace: options.replace
+      replace
     });
     transactionStatuses.set(transactionName, { ...DEFAULT_TRANSACTION_STATUS });
     transactionRuntime.set(transactionName, {
@@ -1571,9 +1575,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     definition: MutationDefinition<TState, TPayload, TResult>,
     options: MeshRegistryOptions = {}
   ): MutationHandle<TPayload, TResult> {
-    assertCanRegister(mutationDefinitions, "mutation", mutationName, options.replace);
+    const replace = assertCanRegister(mutationDefinitions, "mutation", mutationName, options.replace);
     const runtime = mutationRuntime.get(mutationName);
-    if (runtime && options.replace) runtime.controller?.abort();
+    if (runtime && replace) runtime.controller?.abort();
     mutationDefinitions.set(mutationName, definition as MutationDefinition<TState, unknown, unknown>);
     mutationStatuses.set(mutationName, { ...DEFAULT_MUTATION_STATUS });
     mutationRuntime.set(mutationName, {
@@ -2136,9 +2140,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     defaults: TValues,
     urlOptions: UrlStateOptions<TValues> = {}
   ): void {
-    assertCanRegister(urlStates, "urlState", urlName, urlOptions.replace);
+    const replace = assertCanRegister(urlStates, "urlState", urlName, urlOptions.replace);
     const existing = urlStates.get(urlName);
-    if (existing && urlOptions.replace) {
+    if (existing && replace) {
       existing.cleanup();
     }
 
@@ -2217,9 +2221,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     definition: FormDefinition<TValues>,
     options: MeshRegistryOptions = {}
   ): void {
-    assertCanRegister(formEntries, "form", formName, options.replace);
+    const replace = assertCanRegister(formEntries, "form", formName, options.replace);
     const existing = formEntries.get(formName);
-    if (existing && options.replace) {
+    if (existing && replace) {
       existing.autosave?.cancel();
     }
     const initialValues = cloneState(definition.initialValues);
@@ -2234,7 +2238,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     };
     entry.autosave = createFormAutosave(formName, entry);
     formEntries.set(formName, entry);
-    if (existing && options.replace) {
+    if (existing && replace) {
       notifyForm(formName);
     }
   }
@@ -2340,10 +2344,15 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   }
 
   function use(plugin: MeshPlugin<TState>): Unsubscribe {
-    if (pluginCleanups.has(plugin.name)) {
-      throw new DuplicateRegistrationError(`Plugin "${plugin.name}" is already registered.`, {
-        metadata: { plugin: plugin.name }
-      });
+    const existing = pluginCleanups.get(plugin.name);
+    if (existing) {
+      if (!shouldAllowViteDevReregistration()) {
+        throw new DuplicateRegistrationError(`Plugin "${plugin.name}" is already registered.`, {
+          metadata: { plugin: plugin.name }
+        });
+      }
+      existing.cleanup?.();
+      pluginCleanups.delete(plugin.name);
     }
 
     const cleanup = plugin.setup({
@@ -2351,10 +2360,12 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       emit: dispatchEvent,
       onEvent
     });
-    pluginCleanups.set(plugin.name, cleanup);
+    const entry: PluginEntry = { cleanup };
+    pluginCleanups.set(plugin.name, entry);
 
     return () => {
-      cleanup?.();
+      if (pluginCleanups.get(plugin.name) !== entry) return;
+      entry.cleanup?.();
       pluginCleanups.delete(plugin.name);
     };
   }
@@ -3388,12 +3399,24 @@ function assertCanRegister(
   kind: string,
   registrationName: string,
   replace = false
-): void {
-  if (!replace && registry.has(registrationName)) {
+): boolean {
+  const exists = registry.has(registrationName);
+  const shouldReplace = replace || (exists && shouldAllowViteDevReregistration());
+
+  if (exists && !shouldReplace) {
     throw new DuplicateRegistrationError(`${kind} "${registrationName}" is already registered.`, {
       metadata: { kind, name: registrationName }
     });
   }
+
+  return shouldReplace;
+}
+
+function shouldAllowViteDevReregistration(): boolean {
+  if (typeof document === "undefined") return false;
+  if (typeof process !== "undefined" && process.env?.NODE_ENV === "production") return false;
+
+  return Boolean(document.querySelector("script[src*='@vite/client']"));
 }
 
 function attachActionRef<TPayload, TResult>(

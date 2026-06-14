@@ -6,6 +6,7 @@ import {
   type QueuedMutation,
   type ResourceFetchOptions,
   type ResourceSnapshot,
+  type StateMeshProviderProps,
   zodSchema,
   useMeshAction,
   useMeshMutation,
@@ -23,6 +24,13 @@ const mesh = createMesh({
 });
 
 expectType<"light" | "dark">(mesh.getState().theme);
+
+const providerProps: StateMeshProviderProps<typeof mesh extends { getState: () => infer TState } ? TState : never> = {
+  mesh,
+  children: null,
+  devForceFullReload: false
+};
+expectType<boolean | undefined>(providerProps.devForceFullReload);
 
 const addItem = mesh.action("cart.add", (state, payload: { id: string }) => {
   state.cart.items.push({ id: payload.id, quantity: 1 });

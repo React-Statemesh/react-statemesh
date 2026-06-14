@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ActionError, ComputedError, DuplicateRegistrationError, createMesh } from "../../src";
 
 type AppState = {
@@ -27,6 +27,10 @@ function createAppMesh() {
     }
   });
 }
+
+afterEach(() => {
+  document.querySelectorAll("script[src*='@vite/client']").forEach((script) => script.remove());
+});
 
 describe("createMesh core store", () => {
   it("reads, writes, resets, and restores snapshots", () => {
@@ -133,6 +137,24 @@ describe("actions and computed values", () => {
       compute: () => 10
     }, { replace: true });
     expect(mesh.getComputed("cart.count")).toBe(10);
+  });
+
+  it("replaces duplicate registrations during Vite browser HMR", () => {
+    const script = document.createElement("script");
+    script.src = "/@vite/client";
+    document.head.appendChild(script);
+
+    const mesh = createAppMesh();
+    mesh.action("theme.set", (state) => {
+      state.theme = "light";
+    });
+
+    const forceDark = mesh.action("theme.set", (state) => {
+      state.theme = "dark";
+    });
+
+    forceDark(undefined);
+    expect(mesh.getState().theme).toBe("dark");
   });
 
   it("caches computed values until a dependency changes", () => {
