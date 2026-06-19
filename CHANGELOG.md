@@ -18,3 +18,4 @@
 - Adds checkbox, radio, select, and file helpers to production forms.
 - Adds DevTools timeline search, category filters, failed-only view, and export/copy support.
 - Adds tested TypeScript and plain JavaScript production-upgrades examples for the new daily-app APIs.
+- Adds Suspense resource reads, reset-aware mesh error boundaries, StateMesh Doctor diagnostics, bounded performance profiling, DevTools profiler/Doctor tabs, and tested production-observability examples.

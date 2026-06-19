@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import ProductionObservabilityApp from "../../examples/production-observability/src/App";
 import ProductionUpgradesApp, { createProductionUpgradesExample, type Filters as ProductFilters } from "../../examples/production-upgrades/src/App";
 import App from "../../examples/realworld-support-desk/src/App";
 import {
@@ -40,6 +41,26 @@ describe("realworld support desk example", () => {
     expect(form.checkbox("alerts").checked).toBe(false);
     expect(form.radio("plan", "enterprise").checked).toBe(true);
     expect(form.select("country").value).toBe("US");
+  });
+
+  it("renders the production observability example", async () => {
+    render(<ProductionObservabilityApp />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Ada" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Record refresh" }));
+    expect(screen.getByText("Refreshes: 1")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Profiler" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Doctor" })).toBeTruthy();
+  });
+
+  it("renders the plain JavaScript production observability example", async () => {
+    // @ts-expect-error The JavaScript example is intentionally authored as .jsx.
+    const { default: JavaScriptApp } = await import("../../examples-js/production-observability/src/App.jsx");
+
+    render(<JavaScriptApp />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Ada" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Record refresh" })).toBeTruthy();
   });
 
   it("renders the production upgrades React example", async () => {

@@ -33,6 +33,8 @@ import type {
   MeshActionContext,
   MeshDehydratedSnapshot,
   MeshDehydrateOptions,
+  MeshDoctorOptions,
+  MeshDoctorReport,
   MeshGuard,
   MeshGuardContext,
   MeshGuardTarget,
@@ -41,6 +43,8 @@ import type {
   MeshMiddleware,
   MeshOptions,
   MeshPath,
+  MeshProfilerFilter,
+  MeshProfilerSample,
   MaybePromise,
   MeshPlugin,
   MeshRegistryOptions,
@@ -249,6 +253,12 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   const formEntries = new Map<string, FormEntry<Record<string, unknown>>>();
   const pluginCleanups = new Map<string, PluginEntry>();
   const pendingEvents: MeshEvent[] = [];
+  const profilerSamples: MeshProfilerSample[] = [];
+  const profilerListeners = new Set<() => void>();
+  const profilerStarts = new Map<string, number[]>();
+  const profilerLimit = Math.max(1, options.profiler?.limit ?? 200);
+  const profilerSlowThreshold = Math.max(0, options.profiler?.slowThreshold ?? 16);
+  let profilerSampleCounter = 0;
 
   const batcher = createBatcher(() => {
     const events = pendingEvents.splice(0);
@@ -306,6 +316,10 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     runQueuedMutations,
     clearQueuedMutations,
     persistQueuedMutations,
+    doctor,
+    getProfilerSamples,
+    clearProfilerSamples,
+    subscribeProfiler,
     normalizeEntities,
     mergeEntities,
     removeEntities,
@@ -354,6 +368,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   }
 
   function dispatchEvent(event: MeshEvent): void {
+    profileEvent(event);
+
     for (const middleware of middlewares) {
       try {
         catchAsyncError(middleware(event, mesh));
@@ -369,6 +385,300 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
         // Event listeners are observational.
       }
     }
+  }
+
+  function profileEvent(event: MeshEvent): void {
+    switch (event.type) {
+      case "action.started":
+        startProfilerSample("action", event.name, `action:${event.name}`, event.timestamp);
+        return;
+      case "transaction.started":
+        startProfilerSample("transaction", event.name, `transaction:${event.name}`, event.timestamp);
+        return;
+      case "resource.fetch.started":
+        startProfilerSample("resource", event.name, `resource:${event.key}`, event.timestamp);
+        return;
+      case "mutation.started":
+        startProfilerSample("mutation", event.name, `mutation:${event.name}`, event.timestamp);
+        return;
+      case "form.submit.started":
+        startProfilerSample("form", event.name, `form:submit:${event.name}`, event.timestamp);
+        return;
+      case "form.autosave.started":
+        startProfilerSample("form", event.name, `form:autosave:${event.name}`, event.timestamp);
+        return;
+      case "action.completed":
+        finishProfilerSample("action", event.name, `action:${event.name}`, "success", event.timestamp, event.duration, event.metadata);
+        return;
+      case "action.failed":
+        finishProfilerSample("action", event.name, `action:${event.name}`, "error", event.timestamp, undefined, {
+          ...event.metadata,
+          error: getProfilerErrorCode(event.error)
+        });
+        return;
+      case "transaction.committed":
+        finishProfilerSample("transaction", event.name, `transaction:${event.name}`, "success", event.timestamp, event.duration, event.metadata);
+        return;
+      case "transaction.failed":
+        finishProfilerSample("transaction", event.name, `transaction:${event.name}`, "error", event.timestamp, undefined, {
+          ...event.metadata,
+          error: getProfilerErrorCode(event.error)
+        });
+        return;
+      case "transaction.cancelled":
+        finishProfilerSample("transaction", event.name, `transaction:${event.name}`, "cancelled", event.timestamp, undefined, event.metadata);
+        return;
+      case "resource.fetch.succeeded":
+        finishProfilerSample("resource", event.name, `resource:${event.key}`, "success", event.timestamp, event.duration, {
+          ...event.metadata,
+          key: event.key
+        });
+        return;
+      case "resource.fetch.failed":
+        finishProfilerSample("resource", event.name, `resource:${event.key}`, "error", event.timestamp, undefined, {
+          ...event.metadata,
+          key: event.key,
+          error: getProfilerErrorCode(event.error)
+        });
+        return;
+      case "mutation.succeeded":
+        finishProfilerSample("mutation", event.name, `mutation:${event.name}`, "success", event.timestamp, event.duration, event.metadata);
+        return;
+      case "mutation.failed":
+        finishProfilerSample("mutation", event.name, `mutation:${event.name}`, "error", event.timestamp, undefined, {
+          ...event.metadata,
+          error: getProfilerErrorCode(event.error)
+        });
+        return;
+      case "form.submit.succeeded":
+        finishProfilerSample("form", event.name, `form:submit:${event.name}`, "success", event.timestamp, event.duration, {
+          ...event.metadata,
+          mode: "submit"
+        });
+        return;
+      case "form.submit.failed":
+        finishProfilerSample("form", event.name, `form:submit:${event.name}`, "error", event.timestamp, undefined, {
+          ...event.metadata,
+          mode: "submit",
+          error: getProfilerErrorCode(event.error)
+        });
+        return;
+      case "form.autosave.succeeded":
+        finishProfilerSample("form", event.name, `form:autosave:${event.name}`, "success", event.timestamp, event.duration, {
+          ...event.metadata,
+          mode: "autosave"
+        });
+        return;
+      case "form.autosave.failed":
+        finishProfilerSample("form", event.name, `form:autosave:${event.name}`, "error", event.timestamp, undefined, {
+          ...event.metadata,
+          mode: "autosave",
+          error: getProfilerErrorCode(event.error)
+        });
+        return;
+      default:
+        return;
+    }
+  }
+
+  function startProfilerSample(
+    _kind: MeshProfilerSample["kind"],
+    _operationName: string,
+    key: string,
+    startedAt: number
+  ): void {
+    const starts = profilerStarts.get(key) ?? [];
+    starts.push(startedAt);
+    profilerStarts.set(key, starts);
+  }
+
+  function finishProfilerSample(
+    kind: MeshProfilerSample["kind"],
+    operationName: string,
+    key: string,
+    status: MeshProfilerSample["status"],
+    finishedAt: number,
+    duration?: number,
+    metadata?: Record<string, unknown>
+  ): void {
+    const starts = profilerStarts.get(key);
+    const startedAt = starts?.shift() ?? Math.max(0, finishedAt - (duration ?? 0));
+    if (starts?.length === 0) profilerStarts.delete(key);
+    recordProfilerSample({
+      id: `profile_${++profilerSampleCounter}`,
+      kind,
+      name: operationName,
+      status,
+      duration: duration ?? Math.max(0, finishedAt - startedAt),
+      startedAt,
+      finishedAt,
+      slow: (duration ?? Math.max(0, finishedAt - startedAt)) >= profilerSlowThreshold,
+      metadata
+    });
+  }
+
+  function recordProfilerSample(sample: MeshProfilerSample): void {
+    profilerSamples.push(sample);
+    if (profilerSamples.length > profilerLimit) {
+      profilerSamples.splice(0, profilerSamples.length - profilerLimit);
+    }
+    for (const listener of profilerListeners) listener();
+  }
+
+  function getProfilerSamples(filter: MeshProfilerFilter = {}): MeshProfilerSample[] {
+    const query = filter.query?.trim().toLowerCase();
+    const samples = profilerSamples.filter((sample) => {
+      if (filter.kinds?.length && !filter.kinds.includes(sample.kind)) return false;
+      if (filter.minDuration !== undefined && sample.duration < filter.minDuration) return false;
+      if (filter.slowOnly && !sample.slow) return false;
+      if (query && !`${sample.kind} ${sample.name} ${sample.status}`.toLowerCase().includes(query)) return false;
+      return true;
+    });
+    const limited = filter.limit === undefined ? samples : samples.slice(Math.max(0, samples.length - Math.max(0, filter.limit)));
+    return limited.map((sample) => ({
+      ...sample,
+      metadata: sample.metadata ? { ...sample.metadata } : undefined
+    }));
+  }
+
+  function clearProfilerSamples(): void {
+    if (profilerSamples.length === 0) return;
+    profilerSamples.length = 0;
+    profilerStarts.clear();
+    for (const listener of profilerListeners) listener();
+  }
+
+  function subscribeProfiler(listener: () => void): Unsubscribe {
+    profilerListeners.add(listener);
+    return () => profilerListeners.delete(listener);
+  }
+
+  function doctor(doctorOptions: MeshDoctorOptions = {}): MeshDoctorReport {
+    const issues: MeshDoctorReport["issues"] = [];
+    const now = Date.now();
+    const stateSizeWarningBytes = doctorOptions.stateSizeWarningBytes ?? 250_000;
+    const queuedMutationAgeWarning = parseDuration(doctorOptions.queuedMutationAgeWarning ?? "5m");
+    const staleResourceWarning = parseDuration(doctorOptions.staleResourceWarning ?? "5m");
+    const slowOperationWarningMs = doctorOptions.slowOperationWarningMs ?? profilerSlowThreshold;
+    const stateSize = estimateSerializedSize(state);
+
+    if (stateSize >= stateSizeWarningBytes) {
+      issues.push({
+        level: "warning",
+        code: "STATE_SIZE_LARGE",
+        message: `Serialized mesh state is approximately ${stateSize} bytes.`,
+        category: "state",
+        metadata: { bytes: stateSize, threshold: stateSizeWarningBytes }
+      });
+    }
+
+    for (const [resourceName, definition] of resourceDefinitions) {
+      if (!definition.tags) {
+        issues.push({
+          level: "warning",
+          code: "RESOURCE_WITHOUT_TAGS",
+          message: `Resource "${resourceName}" has no invalidation tags.`,
+          category: "resource",
+          name: resourceName
+        });
+      }
+    }
+
+    for (const entry of resourceEntries.values()) {
+      const definition = resourceDefinitions.get(entry.name);
+      if (!definition) continue;
+      if (entry.error) {
+        issues.push({
+          level: "error",
+          code: "RESOURCE_ERROR",
+          message: `Resource "${entry.name}" is in an error state.`,
+          category: "resource",
+          name: entry.name,
+          metadata: { key: entry.key, error: getProfilerErrorCode(entry.error) }
+        });
+      }
+      const staleFor = entry.updatedAt ? now - entry.updatedAt : 0;
+      if (entry.status === "success" && isResourceEntryStale(entry, definition) && staleFor >= staleResourceWarning) {
+        issues.push({
+          level: "warning",
+          code: "RESOURCE_STALE_LONG",
+          message: `Resource "${entry.name}" has remained stale for ${staleFor}ms.`,
+          category: "resource",
+          name: entry.name,
+          metadata: { key: entry.key, staleFor, threshold: staleResourceWarning }
+        });
+      }
+    }
+
+    for (const queued of queuedMutations) {
+      const queuedFor = now - queued.queuedAt;
+      if (queuedFor >= queuedMutationAgeWarning) {
+        issues.push({
+          level: "error",
+          code: "MUTATION_QUEUE_STUCK",
+          message: `Mutation "${queued.name}" has been queued for ${queuedFor}ms.`,
+          category: "mutation",
+          name: queued.name,
+          metadata: { id: queued.id, queuedFor, threshold: queuedMutationAgeWarning }
+        });
+      }
+    }
+
+    for (const [formName, entry] of formEntries) {
+      const serverErrorCount = Object.keys(entry.state.serverErrors).length;
+      if (entry.state.submitError || entry.state.autosaveError || serverErrorCount > 0) {
+        issues.push({
+          level: entry.state.submitError || entry.state.autosaveError ? "error" : "warning",
+          code: "FORM_UNRESOLVED_ERRORS",
+          message: `Form "${formName}" has unresolved submit, autosave, or server errors.`,
+          category: "form",
+          name: formName,
+          metadata: {
+            serverErrorCount,
+            submitError: getProfilerErrorCode(entry.state.submitError),
+            autosaveError: getProfilerErrorCode(entry.state.autosaveError)
+          }
+        });
+      }
+    }
+
+    const slowestByOperation = new Map<string, MeshProfilerSample>();
+    for (const sample of profilerSamples) {
+      if (sample.duration < slowOperationWarningMs) continue;
+      const key = `${sample.kind}:${sample.name}`;
+      const current = slowestByOperation.get(key);
+      if (!current || sample.duration > current.duration) slowestByOperation.set(key, sample);
+    }
+    for (const sample of slowestByOperation.values()) {
+      issues.push({
+        level: "warning",
+        code: "OPERATION_SLOW",
+        message: `${sample.kind} "${sample.name}" took ${sample.duration}ms.`,
+        category: "profiler",
+        name: sample.name,
+        metadata: { kind: sample.kind, duration: sample.duration, threshold: slowOperationWarningMs }
+      });
+    }
+
+    if (doctorOptions.includeInfo && issues.length === 0) {
+      issues.push({
+        level: "info",
+        code: "MESH_HEALTHY",
+        message: `No production-readiness issues were detected for mesh "${name}".`,
+        category: "mesh"
+      });
+    }
+
+    return {
+      mesh: name,
+      generatedAt: now,
+      issues,
+      summary: {
+        errors: issues.filter((issue) => issue.level === "error").length,
+        warnings: issues.filter((issue) => issue.level === "warning").length,
+        info: issues.filter((issue) => issue.level === "info").length
+      }
+    };
   }
 
   function commitState(nextState: TState, event: MeshEvent, silent = false): void {
@@ -459,6 +769,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     mutationStatuses.clear();
     mutationListeners.clear();
     mutationQueueListeners.clear();
+    profilerSamples.length = 0;
+    profilerListeners.clear();
+    profilerStarts.clear();
     for (const runtime of mutationRuntime.values()) {
       runtime.controller?.abort();
     }
@@ -672,14 +985,38 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       return entry.value as TValue;
     }
 
+    const startedAt = Date.now();
     try {
       const value = entry.definition.compute(state);
       entry.value = value;
       entry.hasValue = true;
       entry.dirty = false;
       entry.depValues = readDependencyValues(entry.definition.deps);
+      const finishedAt = Date.now();
+      recordProfilerSample({
+        id: `profile_${++profilerSampleCounter}`,
+        kind: "computed",
+        name: computedName,
+        status: "success",
+        duration: Math.max(0, finishedAt - startedAt),
+        startedAt,
+        finishedAt,
+        slow: finishedAt - startedAt >= profilerSlowThreshold
+      });
       return value as TValue;
     } catch (error) {
+      const finishedAt = Date.now();
+      recordProfilerSample({
+        id: `profile_${++profilerSampleCounter}`,
+        kind: "computed",
+        name: computedName,
+        status: "error",
+        duration: Math.max(0, finishedAt - startedAt),
+        startedAt,
+        finishedAt,
+        slow: finishedAt - startedAt >= profilerSlowThreshold,
+        metadata: { error: getProfilerErrorCode(error) }
+      });
       throw new ComputedError(`Computed value "${computedName}" failed.`, {
         cause: error,
         metadata: { computed: computedName }
@@ -3843,6 +4180,26 @@ function getRetryDelay(delayOption: number | ((attempt: number, error: Error) =>
 function toError(error: unknown): Error & { code?: string } {
   if (error instanceof Error) return error as Error & { code?: string };
   return new Error(String(error)) as Error & { code?: string };
+}
+
+function getProfilerErrorCode(error: unknown): string | null {
+  if (!error) return null;
+  if (error instanceof Error) {
+    const code = (error as Error & { code?: unknown }).code;
+    return typeof code === "string" ? code : error.name;
+  }
+  return typeof error === "string" ? error : "UnknownError";
+}
+
+function estimateSerializedSize(value: unknown): number {
+  try {
+    const serialized = JSON.stringify(value);
+    if (!serialized) return 0;
+    if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(serialized).length;
+    return serialized.length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
 }
 
 function summarizePayload(payload: unknown): unknown {

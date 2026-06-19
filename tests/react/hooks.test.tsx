@@ -1,14 +1,16 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createMesh,
+  MeshErrorBoundary,
   ProviderError,
   StateMeshProvider,
   useMeshMutation,
   useMeshResource,
   useMeshSelector,
-  useMeshState
+  useMeshState,
+  useSuspenseMeshResource
 } from "../../src";
 
 describe("React hooks", () => {
@@ -172,6 +174,75 @@ describe("React hooks", () => {
       resolvers.get(2)?.({ page: 2, title: "Page 2" });
     });
     await waitFor(() => expect(screen.getByText("Page 2")).toBeTruthy());
+  });
+
+  it("suspends until a resource resolves and returns non-null data", async () => {
+    const mesh = createMesh({ state: {} });
+    let resolveTodos!: (value: Array<{ id: string; title: string }>) => void;
+    const todosResource = mesh.resource("todos.suspense", {
+      fetch() {
+        return new Promise<Array<{ id: string; title: string }>>((resolve) => {
+          resolveTodos = resolve;
+        });
+      }
+    });
+
+    function Todos() {
+      const todos = useSuspenseMeshResource(todosResource);
+      return <span>{todos.data[0]?.title}</span>;
+    }
+
+    render(
+      <StateMeshProvider mesh={mesh}>
+        <Suspense fallback={<span>Loading suspense</span>}>
+          <Todos />
+        </Suspense>
+      </StateMeshProvider>
+    );
+
+    expect(screen.getByText("Loading suspense")).toBeTruthy();
+    await waitFor(() => expect(resolveTodos).toBeTypeOf("function"));
+    await act(async () => {
+      resolveTodos([{ id: "1", title: "Suspense ready" }]);
+    });
+
+    await waitFor(() => expect(screen.getByText("Suspense ready")).toBeTruthy());
+  });
+
+  it("retries a failed suspense resource through MeshErrorBoundary", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const mesh = createMesh({ state: {} });
+    let attempts = 0;
+    const todosResource = mesh.resource("todos.suspense.retry", {
+      async fetch() {
+        attempts += 1;
+        if (attempts === 1) throw new Error("Temporary failure");
+        return [{ id: "1", title: "Recovered" }];
+      }
+    });
+
+    function Todos() {
+      const todos = useSuspenseMeshResource(todosResource);
+      return <span>{todos.data[0]?.title}</span>;
+    }
+
+    render(
+      <StateMeshProvider mesh={mesh}>
+        <MeshErrorBoundary fallbackRender={({ error, reset }) => (
+          <button type="button" onClick={reset}>{error.message}: retry</button>
+        )}>
+          <Suspense fallback={<span>Loading retry</span>}>
+            <Todos />
+          </Suspense>
+        </MeshErrorBoundary>
+      </StateMeshProvider>
+    );
+
+    const retryButton = await screen.findByRole("button", { name: /failed to fetch.*retry/i });
+    fireEvent.click(retryButton);
+
+    await waitFor(() => expect(screen.getByText("Recovered")).toBeTruthy());
+    expect(attempts).toBe(2);
   });
 
   it("supports reconnect refetch, focus refetch, and prefetch from hooks", async () => {

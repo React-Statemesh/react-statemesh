@@ -83,6 +83,96 @@ export type MeshEvent =
   | { type: "mutation.failed"; name: string; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "mesh.hydrated"; timestamp: number; metadata?: Record<string, unknown> };
 
+/** A profiler sample recorded from a named StateMesh operation. */
+export type MeshProfilerSample = {
+  /** Unique sample id. */
+  id: string;
+  /** Operation category. */
+  kind: "action" | "transaction" | "resource" | "mutation" | "form" | "computed";
+  /** Registered operation name. */
+  name: string;
+  /** Final status for the sample. */
+  status: "success" | "error" | "cancelled";
+  /** Duration in milliseconds. */
+  duration: number;
+  /** Start timestamp in milliseconds. */
+  startedAt: number;
+  /** Finish timestamp in milliseconds. */
+  finishedAt: number;
+  /** True when the sample crossed the configured slow threshold. */
+  slow: boolean;
+  /** Extra diagnostic metadata. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Filter for reading profiler samples. */
+export type MeshProfilerFilter = {
+  /** Include only these operation kinds. */
+  kinds?: readonly MeshProfilerSample["kind"][];
+  /** Include only samples at or above this duration. */
+  minDuration?: number;
+  /** Include only slow samples. */
+  slowOnly?: boolean;
+  /** Include only samples whose name or kind contains this query. */
+  query?: string;
+  /** Maximum samples returned. Defaults to all retained samples. */
+  limit?: number;
+};
+
+/** Runtime profiler configuration. */
+export type MeshProfilerOptions = {
+  /** Number of samples retained in memory. Defaults to 200. */
+  limit?: number;
+  /** Samples at or above this duration are marked slow. Defaults to 16ms. */
+  slowThreshold?: number;
+};
+
+/** Diagnostic issue returned by `mesh.doctor()`. */
+export type MeshDoctorIssue = {
+  /** Issue severity. */
+  level: "info" | "warning" | "error";
+  /** Stable machine-readable code. */
+  code: string;
+  /** Human-readable explanation. */
+  message: string;
+  /** Area that produced the issue. */
+  category: "state" | "resource" | "mutation" | "form" | "profiler" | "mesh";
+  /** Related registration name when available. */
+  name?: string;
+  /** Safe diagnostic metadata. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Options for StateMesh Doctor diagnostics. */
+export type MeshDoctorOptions = {
+  /** Warn when serialized app state is larger than this many bytes. Defaults to 250kb. */
+  stateSizeWarningBytes?: number;
+  /** Warn/error when queued mutations are older than this duration. Defaults to 5m. */
+  queuedMutationAgeWarning?: MeshDuration;
+  /** Warn when a successful resource has been stale longer than this duration. Defaults to 5m. */
+  staleResourceWarning?: MeshDuration;
+  /** Warn when profiler samples cross this duration. Defaults to the profiler slow threshold. */
+  slowOperationWarningMs?: number;
+  /** Include informational health notes. Defaults to false. */
+  includeInfo?: boolean;
+};
+
+/** Full diagnostic report returned by `mesh.doctor()`. */
+export type MeshDoctorReport = {
+  /** Mesh name. */
+  mesh: string;
+  /** Report timestamp. */
+  generatedAt: number;
+  /** Diagnostic issues. */
+  issues: MeshDoctorIssue[];
+  /** Summary counts by severity. */
+  summary: {
+    errors: number;
+    warnings: number;
+    info: number;
+  };
+};
+
 /** Runtime operation kinds that can be guarded before execution. */
 export type MeshGuardKind = "action" | "transaction" | "mutation";
 
@@ -1148,6 +1238,8 @@ export type MeshOptions<TState> = {
   devtools?: boolean;
   /** Reserved logger flag for future integrations. */
   logger?: boolean;
+  /** Runtime profiler options. */
+  profiler?: MeshProfilerOptions;
 };
 
 /**
@@ -1276,6 +1368,14 @@ export type Mesh<TState = unknown> = {
   clearQueuedMutations: (error?: Error) => void;
   /** Persist and restore the offline mutation queue. */
   persistQueuedMutations: (options?: MutationQueuePersistOptions) => Unsubscribe;
+  /** Run StateMesh Doctor diagnostics for common production-readiness issues. */
+  doctor: (options?: MeshDoctorOptions) => MeshDoctorReport;
+  /** Read retained performance profiler samples. */
+  getProfilerSamples: (filter?: MeshProfilerFilter) => MeshProfilerSample[];
+  /** Clear retained performance profiler samples. */
+  clearProfilerSamples: () => void;
+  /** Subscribe to profiler sample changes. */
+  subscribeProfiler: (listener: () => void) => Unsubscribe;
   /** Normalize entities into `{ byId, allIds }`. */
   normalizeEntities: <TEntity, TId extends string | number = string | number>(
     entities: readonly TEntity[],

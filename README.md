@@ -272,6 +272,32 @@ const productNames = useMeshResource(productsResource, filters, {
 });
 ```
 
+Use React Suspense when route or section boundaries should own initial loading and error UI:
+
+```tsx
+import { Suspense } from "react";
+import { MeshErrorBoundary, useSuspenseMeshResource } from "react-statemesh";
+
+function Products() {
+  const products = useSuspenseMeshResource(productsResource, filters);
+  return products.data.map((product) => <div key={product.id}>{product.name}</div>);
+}
+
+function ProductsRoute() {
+  return (
+    <MeshErrorBoundary fallbackRender={({ error, reset }) => (
+      <button onClick={reset}>{error.message}: retry</button>
+    )}>
+      <Suspense fallback={<p>Loading products...</p>}>
+        <Products />
+      </Suspense>
+    </MeshErrorBoundary>
+  );
+}
+```
+
+`useSuspenseMeshResource` throws the shared in-flight resource promise only when no cache data exists. Cached data stays visible during background updates. Failed resources throw to `MeshErrorBoundary`, and its reset callback forces one fresh retry.
+
 Prefetch before navigation or on hover:
 
 ```tsx
@@ -689,6 +715,42 @@ function App() {
 
 The DevTools timeline supports event search, category filtering, failed-only filtering, and JSON export/copy for bug reports.
 
+Enable the profiler and Doctor tabs when you want production-readiness diagnostics while developing:
+
+```tsx
+<StateMeshDevtools
+  mesh={mesh}
+  showProfiler
+  showDoctor
+/>
+```
+
+The profiler records bounded samples for named actions, transactions, resources, mutations, form submits/autosaves, and computed values:
+
+```ts
+const slowOperations = mesh.getProfilerSamples({
+  slowOnly: true,
+  minDuration: 16
+});
+
+mesh.subscribeProfiler(() => {
+  console.table(mesh.getProfilerSamples({ limit: 10 }));
+});
+```
+
+StateMesh Doctor inspects live runtime health without mutating the app:
+
+```ts
+const report = mesh.doctor({
+  stateSizeWarningBytes: 250_000,
+  queuedMutationAgeWarning: "5m",
+  staleResourceWarning: "5m",
+  slowOperationWarningMs: 16
+});
+```
+
+Doctor reports large serialized state, resources without invalidation tags, resource errors, long-stale cache entries, stuck offline mutations, unresolved form errors, and slow profiled operations. Reports use stable codes such as `RESOURCE_WITHOUT_TAGS`, `MUTATION_QUEUE_STUCK`, and `OPERATION_SLOW`.
+
 ## Errors
 
 StateMesh exports a predictable error hierarchy:
@@ -774,11 +836,14 @@ TypeScript React examples:
 - `examples/form-submit`
 - `examples/realworld-support-desk`
 - `examples/production-upgrades`
+- `examples/production-observability`
 - `examples/nextjs-app`
 
 The `realworld-support-desk` example is the full production workflow reference. It combines persisted UI state, URL filters, computed state, the API client, resource cache, prefetch, SSR cache hydration, entity helpers, optimistic/offline mutations, invalidation/refetch, production forms, async validation, autosave, field arrays, multi-step form state, tab sync, logger hooks, and in-app devtools.
 
 The `production-upgrades` example focuses on the newer daily-app helpers: resource `keepPreviousData`/`placeholderData`/`select`, relative API bases, URL dynamic param capture, action guards, and checkbox/radio/select/file form helpers.
+
+The `production-observability` example combines Suspense resources, reset-aware error handling, Doctor diagnostics, and the performance profiler.
 
 Plain JavaScript React examples:
 
@@ -792,6 +857,7 @@ Plain JavaScript React examples:
 - `examples-js/form-submit`
 - `examples-js/realworld-support-desk`
 - `examples-js/production-upgrades`
+- `examples-js/production-observability`
 - `examples-js/nextjs-app`
 
 The JavaScript support desk example mirrors the same app shape with `.jsx`, so teams that are not using TypeScript can copy the runtime patterns directly.

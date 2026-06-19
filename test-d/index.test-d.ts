@@ -11,6 +11,10 @@ import {
   type ApiUploadProgress,
   type ApiRetryOptions,
   type MeshDehydratedSnapshot,
+  type MeshDoctorReport,
+  type MeshErrorBoundaryProps,
+  type MeshErrorResetBoundaryValue,
+  type MeshProfilerSample,
   type QueuedMutation,
   type ResourceFetchOptions,
   type ResourceSnapshot,
@@ -20,10 +24,15 @@ import {
   useMeshMutation,
   useMeshResource,
   useMeshTransaction,
-  useMeshUrlState
+  useMeshUrlState,
+  useSuspenseMeshResource
 } from "../dist/index";
 
 const mesh = createMesh({
+  profiler: {
+    limit: 50,
+    slowThreshold: 16
+  },
   state: {
     theme: "light" as "light" | "dark",
     cart: {
@@ -80,6 +89,8 @@ const productTitles = useMeshResource(productsResource, { search: "key" }, {
   }
 });
 expectType<string[] | null>(productTitles.data);
+const suspenseProducts = useSuspenseMeshResource(productsResource, { search: "key" });
+expectType<Array<{ id: string; title: string }>>(suspenseProducts.data);
 const resourceSnapshot = mesh.dehydrateResources({ names: ["products.list"] });
 expectType<ResourceSnapshot>(resourceSnapshot);
 expectType<void>(mesh.hydrateResources(resourceSnapshot));
@@ -87,6 +98,26 @@ expectType<() => void>(mesh.persistResources({ names: ["products.list"] }));
 const meshSnapshot = mesh.dehydrate({ forms: true });
 expectType<MeshDehydratedSnapshot>(meshSnapshot);
 expectType<void>(mesh.hydrate(meshSnapshot, { mergeState: true }));
+expectType<MeshDoctorReport>(mesh.doctor({ staleResourceWarning: "5m" }));
+expectType<MeshProfilerSample[]>(mesh.getProfilerSamples({ kinds: ["action"], slowOnly: true }));
+expectType<void>(mesh.clearProfilerSamples());
+expectType<() => void>(mesh.subscribeProfiler(() => undefined));
+
+const boundaryProps: MeshErrorBoundaryProps = {
+  children: null,
+  fallbackRender({ error, reset }) {
+    expectType<Error>(error);
+    expectType<() => void>(reset);
+    return null;
+  }
+};
+expectType<MeshErrorBoundaryProps>(boundaryProps);
+const resetBoundaryValue: MeshErrorResetBoundaryValue = {
+  reset() {
+    return undefined;
+  }
+};
+expectType<MeshErrorResetBoundaryValue>(resetBoundaryValue);
 
 const createProduct = mesh.mutation("products.create", {
   async mutate(payload: { title: string }) {
