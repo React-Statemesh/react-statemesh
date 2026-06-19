@@ -1,8 +1,16 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StateMeshDevtools, createMesh } from "../../src";
 
 describe("StateMesh DevTools", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("creates masked snapshots for debug reports", () => {
     const mesh = createMesh({
       name: "snapshot-test",
@@ -63,6 +71,13 @@ describe("StateMesh DevTools", () => {
 
     render(<StateMeshDevtools mesh={mesh} />);
 
+    expect(console.info).toHaveBeenCalledWith(
+      expect.stringContaining("React StateMesh DevTools active"),
+      expect.any(String),
+      expect.any(String),
+      "dock-test"
+    );
+    expect(screen.getAllByText("React StateMesh DevTools active").length).toBeGreaterThan(0);
     expect(screen.getByText("State Keys")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     expect(screen.getByText("Resource Cache")).toBeTruthy();

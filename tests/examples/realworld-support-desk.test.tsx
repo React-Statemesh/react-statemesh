@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ProductionObservabilityApp from "../../examples/production-observability/src/App";
 import ProductionUpgradesApp, { createProductionUpgradesExample, type Filters as ProductFilters } from "../../examples/production-upgrades/src/App";
 import App from "../../examples/realworld-support-desk/src/App";
@@ -13,7 +13,12 @@ import {
 } from "../../examples/realworld-support-desk/src/state";
 
 describe("realworld support desk example", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+
   afterEach(() => {
+    vi.restoreAllMocks();
     window.history.replaceState(null, "", "/");
   });
 

@@ -20,6 +20,7 @@ import {
   type QueuedMutation,
   type ResourceFetchOptions,
   type ResourceSnapshot,
+  type StateMeshDevtoolsProps,
   type StateMeshProviderProps,
   zodSchema,
   useMeshAction,
@@ -131,6 +132,11 @@ const componentProps: MeshComponentProps = {
   children: null
 };
 expectType<MeshComponentProps>(componentProps);
+const devtoolsProps: StateMeshDevtoolsProps<typeof mesh extends { getState: () => infer TState } ? TState : never> = {
+  mesh,
+  logActiveMessage: false
+};
+expectType<StateMeshDevtoolsProps<typeof mesh extends { getState: () => infer TState } ? TState : never>>(devtoolsProps);
 
 const boundaryProps: MeshErrorBoundaryProps = {
   children: null,

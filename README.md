@@ -734,6 +734,8 @@ The DevTools UI docks to the bottom of the page, can minimize to a floating laun
 - Doctor diagnostics
 - raw event timeline with search, category, failed-only filtering, and export
 
+When mounted, DevTools logs a one-time `React StateMesh DevTools active` message to the console with the mesh name and a masking tip. Set `logActiveMessage={false}` when a project wants the dock without the console notice.
+
 `mask` is applied before rendering state/form/url/resource/mutation data or exporting a debug report. Large values are converted into bounded previews with `previewBytes`.
 
 Track the component tree by wrapping important UI areas with `MeshComponent`. StateMesh hooks used inside that boundary are attached to the nearest tracked component:

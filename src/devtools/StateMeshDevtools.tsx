@@ -45,6 +45,8 @@ export type StateMeshDevtoolsProps<TState = unknown> = {
   previewBytes?: number;
   /** Include state in snapshots and debug reports. Defaults to true. */
   includeState?: boolean;
+  /** Log a one-time console message when DevTools becomes active. Defaults to true. */
+  logActiveMessage?: boolean;
 };
 
 export type DevtoolsView =
@@ -81,6 +83,8 @@ export type StateMeshDebugReport = {
   events: MeshEvent[];
 };
 
+const loggedDevtoolsMeshes = new WeakSet<object>();
+
 /** Bottom-docked StateMesh DevTools for development and QA builds. */
 export function StateMeshDevtools<TState = unknown>({
   mesh,
@@ -98,7 +102,8 @@ export function StateMeshDevtools<TState = unknown>({
   maximizedHeight = "82vh",
   mask,
   previewBytes = 2_000,
-  includeState = true
+  includeState = true,
+  logActiveMessage = true
 }: StateMeshDevtoolsProps<TState>) {
   const [open, setOpen] = useState(defaultOpen);
   const [maximized, setMaximized] = useState(false);
@@ -120,6 +125,17 @@ export function StateMeshDevtools<TState = unknown>({
       setEvents((current) => [...current.slice(Math.max(0, current.length - limit + 1)), event]);
     });
   }, [mesh, limit]);
+
+  useEffect(() => {
+    if (hidden || !logActiveMessage || loggedDevtoolsMeshes.has(mesh as object) || typeof console === "undefined") return;
+    loggedDevtoolsMeshes.add(mesh as object);
+    console.info(
+      "%cReact StateMesh DevTools active%c\nMesh: %s\nInspect state, resources, mutations, forms, events, profiler, Doctor, and component usage from the bottom dock.\nTip: pass mask={[\"auth.token\"]} before exporting debug reports.",
+      "color: #16a34a; font-weight: 700;",
+      "color: inherit; font-weight: 400;",
+      mesh.name
+    );
+  }, [mesh, hidden, logActiveMessage]);
 
   useEffect(() => {
     const readSnapshot = () => {
@@ -193,9 +209,12 @@ export function StateMeshDevtools<TState = unknown>({
   if (!open) {
     return (
       <button type="button" style={launcherStyle} onClick={() => setOpen(true)} aria-label="Open StateMesh DevTools">
-        <strong>StateMesh</strong>
-        <span style={launcherMetaStyle}>
-          {snapshot.summary.doctorErrors > 0 ? `${snapshot.summary.doctorErrors} errors` : `${events.length} events`}
+        <span style={activeDotStyle} aria-hidden="true" />
+        <span style={launcherTextStyle}>
+          <strong>React StateMesh</strong>
+          <span style={launcherMetaStyle}>
+            DevTools active. {snapshot.summary.doctorErrors > 0 ? `${snapshot.summary.doctorErrors} errors` : `${events.length} events`}
+          </span>
         </span>
       </button>
     );
@@ -206,9 +225,30 @@ export function StateMeshDevtools<TState = unknown>({
   return (
     <aside style={{ ...dockStyle, height: typeof height === "number" ? `${height}px` : height }} aria-label="StateMesh DevTools">
       <header style={headerStyle}>
-        <div style={brandStyle}>
-          <strong style={brandTitleStyle}>StateMesh</strong>
-          <span style={brandMetaStyle}>{mesh.name}</span>
+        <div style={headerTopStyle}>
+          <div style={brandStyle}>
+            <span style={activeDotStyle} aria-hidden="true" />
+            <div style={brandTextStyle}>
+              <strong style={brandTitleStyle}>React StateMesh DevTools active</strong>
+              <span style={brandMetaStyle}>{mesh.name}</span>
+            </div>
+          </div>
+          <div style={headerInsightsStyle} aria-label="StateMesh DevTools summary">
+            <HeaderChip label="Events" value={events.length} />
+            <HeaderChip label="Resources" value={snapshot.summary.resources} />
+            <HeaderChip label="Issues" value={snapshot.summary.doctorErrors + snapshot.summary.doctorWarnings} tone={snapshot.summary.doctorErrors > 0 ? "danger" : snapshot.summary.doctorWarnings > 0 ? "warning" : "ok"} />
+          </div>
+          <div style={actionsStyle}>
+            <button type="button" style={buttonStyle} onClick={() => exportDebugReport(debugReport, onExportDebugReport)}>
+              Export
+            </button>
+            <button type="button" style={buttonStyle} onClick={() => setMaximized((current) => !current)}>
+              {maximized ? "Dock" : "Max"}
+            </button>
+            <button type="button" style={buttonStyle} onClick={() => setOpen(false)}>
+              Min
+            </button>
+          </div>
         </div>
         <nav style={tabsStyle} aria-label="StateMesh DevTools views">
           {tabs.map((tab) => (
@@ -222,17 +262,6 @@ export function StateMeshDevtools<TState = unknown>({
             </button>
           ))}
         </nav>
-        <div style={actionsStyle}>
-          <button type="button" style={buttonStyle} onClick={() => exportDebugReport(debugReport, onExportDebugReport)}>
-            Export
-          </button>
-          <button type="button" style={buttonStyle} onClick={() => setMaximized((current) => !current)}>
-            {maximized ? "Dock" : "Max"}
-          </button>
-          <button type="button" style={buttonStyle} onClick={() => setOpen(false)}>
-            Min
-          </button>
-        </div>
       </header>
       <section style={bodyStyle}>
         {view === "overview" ? <OverviewPanel snapshot={snapshot} events={events} /> : null}
@@ -302,6 +331,7 @@ function OverviewPanel({ snapshot, events }: { snapshot: MeshDevtoolsSnapshot; e
 
   return (
     <div style={panelGridStyle}>
+      <DevtoolsActivePanel snapshot={snapshot} events={events} />
       <div style={metricsGridStyle}>
         {metrics.map(([label, value]) => (
           <div key={label} style={metricStyle}>
@@ -321,6 +351,29 @@ function OverviewPanel({ snapshot, events }: { snapshot: MeshDevtoolsSnapshot; e
         </section>
       </div>
     </div>
+  );
+}
+
+function DevtoolsActivePanel({ snapshot, events }: { snapshot: MeshDevtoolsSnapshot; events: MeshEvent[] }) {
+  const issues = snapshot.summary.doctorErrors + snapshot.summary.doctorWarnings;
+  const health = snapshot.summary.doctorErrors > 0 ? "Needs attention" : issues > 0 ? "Warnings found" : "Healthy";
+
+  return (
+    <section style={activePanelStyle}>
+      <div style={activePanelTitleStyle}>
+        <span style={activeDotStyle} aria-hidden="true" />
+        <div>
+          <strong>React StateMesh DevTools active</strong>
+          <p style={activePanelTextStyle}>Live mesh inspection is running for {snapshot.mesh}.</p>
+        </div>
+      </div>
+      <div style={activePanelStatsStyle}>
+        <HeaderChip label="Health" value={health} tone={snapshot.summary.doctorErrors > 0 ? "danger" : issues > 0 ? "warning" : "ok"} />
+        <HeaderChip label="Events" value={events.length} />
+        <HeaderChip label="Components" value={snapshot.summary.components} />
+        <HeaderChip label="Slow Ops" value={snapshot.summary.slowOperations} tone={snapshot.summary.slowOperations > 0 ? "warning" : "neutral"} />
+      </div>
+    </section>
   );
 }
 
@@ -694,6 +747,30 @@ function StatusBadge({ status }: { status: string }) {
   return <span style={statusStyle}>{status}</span>;
 }
 
+function HeaderChip({
+  label,
+  value,
+  tone = "neutral"
+}: {
+  label: string;
+  value: string | number;
+  tone?: "neutral" | "ok" | "warning" | "danger";
+}) {
+  return (
+    <span style={{ ...headerChipStyle, ...getHeaderChipToneStyle(tone) }}>
+      <span style={headerChipLabelStyle}>{label}</span>
+      <strong style={headerChipValueStyle}>{value}</strong>
+    </span>
+  );
+}
+
+function getHeaderChipToneStyle(tone: "neutral" | "ok" | "warning" | "danger") {
+  if (tone === "ok") return headerChipOkStyle;
+  if (tone === "warning") return headerChipWarningStyle;
+  if (tone === "danger") return headerChipDangerStyle;
+  return headerChipNeutralStyle;
+}
+
 function createTabs(showProfiler: boolean, showDoctor: boolean): Array<{ value: DevtoolsView; label: string }> {
   return [
     { value: "overview", label: "Overview" },
@@ -794,7 +871,7 @@ const dockStyle = {
   font: "12px system-ui, sans-serif",
   zIndex: 2147483647,
   display: "grid",
-  gridTemplateRows: "42px 1fr"
+  gridTemplateRows: "auto minmax(0, 1fr)"
 } as const;
 
 const launcherStyle = {
@@ -802,67 +879,160 @@ const launcherStyle = {
   right: 16,
   bottom: 16,
   display: "flex",
-  alignItems: "center",
-  gap: 8,
-  border: "1px solid #18181b",
+  alignItems: "flex-start",
+  gap: 9,
+  border: "1px solid #27272a",
   borderRadius: 8,
   background: "#18181b",
   color: "#ffffff",
-  padding: "8px 10px",
+  padding: "9px 11px",
   boxShadow: "0 14px 32px rgba(15, 23, 42, 0.24)",
   cursor: "pointer",
   font: "12px system-ui, sans-serif",
-  zIndex: 2147483647
+  zIndex: 2147483647,
+  maxWidth: "calc(100vw - 32px)"
+} as const;
+
+const launcherTextStyle = {
+  display: "grid",
+  gap: 2,
+  textAlign: "left"
 } as const;
 
 const launcherMetaStyle = {
-  color: "#d4d4d8"
+  color: "#d4d4d8",
+  fontSize: 11
 } as const;
 
 const headerStyle = {
   display: "grid",
-  gridTemplateColumns: "180px 1fr auto",
-  alignItems: "center",
-  gap: 8,
-  padding: "6px 10px",
+  gridTemplateRows: "auto auto",
+  gap: 6,
+  padding: "8px 10px 7px",
   borderBottom: "1px solid #e4e4e7",
+  minWidth: 0,
+  background: "#ffffff"
+} as const;
+
+const headerTopStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  flexWrap: "wrap",
+  gap: 8,
   minWidth: 0
 } as const;
 
 const brandStyle = {
   display: "flex",
-  alignItems: "center",
+  alignItems: "flex-start",
   gap: 8,
+  minWidth: 180,
+  flex: "1 1 260px"
+} as const;
+
+const brandTextStyle = {
+  display: "grid",
+  gap: 2,
   minWidth: 0
 } as const;
 
 const brandTitleStyle = {
-  fontSize: 13
+  fontSize: 13,
+  lineHeight: 1.2
 } as const;
 
 const brandMetaStyle = {
   color: "#71717a",
   overflow: "hidden",
   textOverflow: "ellipsis",
-  whiteSpace: "nowrap"
+  whiteSpace: "nowrap",
+  fontSize: 11
+} as const;
+
+const activeDotStyle = {
+  width: 8,
+  height: 8,
+  borderRadius: 999,
+  background: "#16a34a",
+  boxShadow: "0 0 0 3px rgba(22, 163, 74, 0.16)",
+  flex: "0 0 auto",
+  marginTop: 4
+} as const;
+
+const headerInsightsStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  overflowX: "auto",
+  flex: "2 1 320px",
+  minWidth: 0,
+  paddingBottom: 1
+} as const;
+
+const headerChipStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  border: "1px solid #e4e4e7",
+  borderRadius: 999,
+  padding: "3px 7px",
+  whiteSpace: "nowrap",
+  flex: "0 0 auto"
+} as const;
+
+const headerChipNeutralStyle = {
+  background: "#fafafa",
+  color: "#3f3f46"
+} as const;
+
+const headerChipOkStyle = {
+  background: "#f0fdf4",
+  color: "#166534",
+  borderColor: "#bbf7d0"
+} as const;
+
+const headerChipWarningStyle = {
+  background: "#fffbeb",
+  color: "#92400e",
+  borderColor: "#fde68a"
+} as const;
+
+const headerChipDangerStyle = {
+  background: "#fef2f2",
+  color: "#991b1b",
+  borderColor: "#fecaca"
+} as const;
+
+const headerChipLabelStyle = {
+  fontSize: 10,
+  opacity: 0.76
+} as const;
+
+const headerChipValueStyle = {
+  fontSize: 11
 } as const;
 
 const tabsStyle = {
   display: "flex",
-  gap: 2,
+  gap: 4,
   overflowX: "auto",
-  minWidth: 0
+  minWidth: 0,
+  width: "100%",
+  padding: "2px 0 1px",
+  scrollbarWidth: "thin"
 } as const;
 
 const tabStyle = {
   border: 0,
-  borderRadius: 5,
-  background: "transparent",
+  borderRadius: 999,
+  background: "#f4f4f5",
   color: "#52525b",
-  padding: "5px 8px",
+  padding: "5px 9px",
   cursor: "pointer",
   font: "12px system-ui, sans-serif",
-  whiteSpace: "nowrap"
+  whiteSpace: "nowrap",
+  flex: "0 0 auto"
 } as const;
 
 const activeTabStyle = {
@@ -874,7 +1044,9 @@ const activeTabStyle = {
 const actionsStyle = {
   display: "flex",
   gap: 6,
-  justifyContent: "flex-end"
+  justifyContent: "flex-end",
+  flexWrap: "wrap",
+  flex: "0 0 auto"
 } as const;
 
 const bodyStyle = {
@@ -886,6 +1058,39 @@ const panelGridStyle = {
   display: "grid",
   gap: 10,
   padding: 10
+} as const;
+
+const activePanelStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  flexWrap: "wrap",
+  gap: 10,
+  border: "1px solid #d4d4d8",
+  borderRadius: 8,
+  background: "#ffffff",
+  padding: "10px 12px"
+} as const;
+
+const activePanelTitleStyle = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 9,
+  minWidth: 220,
+  flex: "1 1 260px"
+} as const;
+
+const activePanelTextStyle = {
+  margin: "3px 0 0",
+  color: "#71717a",
+  fontSize: 11
+} as const;
+
+const activePanelStatsStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  flexWrap: "wrap"
 } as const;
 
 const metricsGridStyle = {
@@ -921,7 +1126,7 @@ const splitGridStyle = {
 
 const componentsGridStyle = {
   display: "grid",
-  gridTemplateColumns: "minmax(240px, 34%) 1fr",
+  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
   gap: 10,
   padding: 10,
   minHeight: "100%"
@@ -961,8 +1166,8 @@ const panelHeaderStyle = {
 } as const;
 
 const toolbarStyle = {
-  display: "grid",
-  gridTemplateColumns: "minmax(160px, 1fr) 136px auto auto auto",
+  display: "flex",
+  flexWrap: "wrap",
   gap: 6,
   alignItems: "center",
   padding: "8px 10px",
@@ -980,11 +1185,13 @@ const buttonStyle = {
   padding: "4px 8px",
   cursor: "pointer",
   font: "12px system-ui, sans-serif",
-  whiteSpace: "nowrap"
+  whiteSpace: "nowrap",
+  minHeight: 28
 } as const;
 
 const inputStyle = {
   minWidth: 0,
+  flex: "1 1 180px",
   border: "1px solid #d4d4d8",
   borderRadius: 6,
   padding: "5px 7px",
@@ -992,6 +1199,7 @@ const inputStyle = {
 } as const;
 
 const selectStyle = {
+  flex: "0 1 140px",
   border: "1px solid #d4d4d8",
   borderRadius: 6,
   padding: "5px 7px",
