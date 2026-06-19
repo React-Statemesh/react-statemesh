@@ -173,6 +173,137 @@ export type MeshDoctorReport = {
   };
 };
 
+/** One StateMesh-aware usage item attached to a React component. */
+export type MeshDevtoolsComponentUsage = {
+  /** Usage category captured by StateMesh React hooks. */
+  kind: "state" | "selector" | "resource" | "mutation" | "action" | "transaction" | "form" | "url" | "computed";
+  /** Path, resource name, action name, form name, or another stable label. */
+  name: string;
+  /** Safe diagnostic details. */
+  details?: Record<string, unknown>;
+};
+
+/** Component registration accepted by StateMesh DevTools tracking. */
+export type MeshDevtoolsComponentRegistration = {
+  /** Stable component instance id. */
+  id: string;
+  /** Display component name. */
+  name: string;
+  /** Parent tracked component id. */
+  parentId?: string | null;
+};
+
+/** Component node returned by the DevTools snapshot. */
+export type MeshDevtoolsComponentNode = MeshDevtoolsComponentRegistration & {
+  /** Number of renders observed by `useMeshComponent` or `MeshComponent`. */
+  renderCount: number;
+  /** Last render timestamp. */
+  lastRenderAt: number;
+  /** StateMesh usages captured inside this component. */
+  usages: MeshDevtoolsComponentUsage[];
+};
+
+/** Options for `mesh.getDevtoolsSnapshot`. */
+export type MeshDevtoolsSnapshotOptions = {
+  /** Mask state/form/url paths such as `"auth.token"` before exposing data. */
+  mask?: readonly MeshPath[];
+  /** Maximum JSON preview bytes for large values. Defaults to 2000. */
+  previewBytes?: number;
+  /** Include full masked state. Defaults to true. */
+  state?: boolean;
+};
+
+/** Lightweight resource row used by StateMesh DevTools. */
+export type MeshDevtoolsResourceRow = Omit<ResourceStatus, "params" | "data" | "error" | "pages"> & {
+  /** Safe params preview. */
+  params: unknown;
+  /** Safe data preview. */
+  data: unknown;
+  /** Safe error preview. */
+  error: unknown;
+  /** Safe pagination page previews. */
+  pages: unknown[];
+  /** Number of active subscribers for this cache entry. */
+  subscribers: number;
+  /** Safe data preview. */
+  preview: unknown;
+};
+
+/** Lightweight mutation row used by StateMesh DevTools. */
+export type MeshDevtoolsMutationRow = Omit<MutationStatus, "data" | "error" | "lastPayload"> & {
+  /** Mutation name. */
+  name: string;
+  /** Safe result preview. */
+  data: unknown;
+  /** Safe error preview. */
+  error: unknown;
+  /** Safe last payload preview. */
+  lastPayload: unknown;
+};
+
+/** Lightweight form row used by StateMesh DevTools. */
+export type MeshDevtoolsFormRow = {
+  /** Form name. */
+  name: string;
+  /** Form values preview. */
+  values: unknown;
+  /** Current client/server merged errors. */
+  errors: Record<string, string>;
+  /** Server errors only. */
+  serverErrors: Record<string, string>;
+  /** Dirty field map. */
+  dirtyFields: Record<string, boolean>;
+  /** Touched field map. */
+  touched: Record<string, boolean>;
+  /** Submit/autosave flags. */
+  submitting: boolean;
+  autosaving: boolean;
+  /** Multi-step form position. */
+  currentStep: string | null;
+  stepIndex: number;
+};
+
+/** Complete read-only DevTools snapshot. */
+export type MeshDevtoolsSnapshot = {
+  /** Mesh name. */
+  mesh: string;
+  /** Snapshot timestamp. */
+  generatedAt: number;
+  /** Masked current state, when requested. */
+  state?: unknown;
+  /** Current resource cache rows. */
+  resources: MeshDevtoolsResourceRow[];
+  /** Current mutation statuses. */
+  mutations: MeshDevtoolsMutationRow[];
+  /** Current form summaries. */
+  forms: MeshDevtoolsFormRow[];
+  /** Current URL state values by name. */
+  urlStates: Record<string, unknown>;
+  /** Queued offline mutations. */
+  queuedMutations: QueuedMutation[];
+  /** Tracked StateMesh-aware React components. */
+  components: MeshDevtoolsComponentNode[];
+  /** Retained profiler samples. */
+  profiler: MeshProfilerSample[];
+  /** Current Doctor report. */
+  doctor: MeshDoctorReport;
+  /** Quick counts for the overview dashboard. */
+  summary: {
+    stateKeys: number;
+    resources: number;
+    resourceErrors: number;
+    staleResources: number;
+    activeMutations: number;
+    queuedMutations: number;
+    forms: number;
+    formErrors: number;
+    components: number;
+    slowOperations: number;
+    doctorErrors: number;
+    doctorWarnings: number;
+  };
+};
+
 /** Runtime operation kinds that can be guarded before execution. */
 export type MeshGuardKind = "action" | "transaction" | "mutation";
 
@@ -203,15 +334,15 @@ export type MeshGuardResult =
   | void
   | boolean
   | {
-      /** Whether the operation should run. */
-      allow: boolean;
-      /** Optional human-readable block reason. */
-      reason?: string;
-      /** Optional error to throw instead of a generated guard error. */
-      error?: Error;
-      /** Extra metadata for the generated guard error. */
-      metadata?: Record<string, unknown>;
-    };
+    /** Whether the operation should run. */
+    allow: boolean;
+    /** Optional human-readable block reason. */
+    reason?: string;
+    /** Optional error to throw instead of a generated guard error. */
+    error?: Error;
+    /** Extra metadata for the generated guard error. */
+    metadata?: Record<string, unknown>;
+  };
 
 /** Guard function used by `mesh.guard`. */
 export type MeshGuard<TState = unknown, TPayload = unknown> = (
@@ -425,8 +556,8 @@ export type TransactionDefinition<TState, TPayload = void, TResult = unknown> = 
   commit?: (state: TState, result: TResult, payload: TPayload, context: TransactionContext<TState, TPayload>) => void;
   /** Use `true` to restore the snapshot, or provide custom rollback logic. */
   rollback?:
-    | boolean
-    | ((state: TState, error: Error, payload: TPayload, context: TransactionContext<TState, TPayload>) => void);
+  | boolean
+  | ((state: TState, error: Error, payload: TPayload, context: TransactionContext<TState, TPayload>) => void);
   /** Mutate state after failure, typically to set error UI. */
   onError?: (state: TState, error: Error, payload: TPayload, context: TransactionContext<TState, TPayload>) => void;
   /** Retry only the effect phase. Optimistic updates are not duplicated. */
@@ -899,17 +1030,17 @@ export type ResourceSubscribeOptions = {
 export type ResourceInvalidation =
   | readonly ResourceTag[]
   | {
-      /** Resource names to invalidate. */
-      names?: readonly string[];
-      /** Tags to invalidate. */
-      tags?: readonly ResourceTag[];
-      /** Custom cache entry predicate. */
-      predicate?: (status: ResourceStatus) => boolean;
-      /** Refetch invalidated resources. `active` only refetches entries with subscribers. */
-      refetch?: boolean | "active";
-      /** Extra metadata emitted with invalidation events. */
-      metadata?: Record<string, unknown>;
-    };
+    /** Resource names to invalidate. */
+    names?: readonly string[];
+    /** Tags to invalidate. */
+    tags?: readonly ResourceTag[];
+    /** Custom cache entry predicate. */
+    predicate?: (status: ResourceStatus) => boolean;
+    /** Refetch invalidated resources. `active` only refetches entries with subscribers. */
+    refetch?: boolean | "active";
+    /** Extra metadata emitted with invalidation events. */
+    metadata?: Record<string, unknown>;
+  };
 
 /** Options for writing cached resource data manually. */
 export type ResourceSetDataOptions = {
@@ -1376,6 +1507,14 @@ export type Mesh<TState = unknown> = {
   clearProfilerSamples: () => void;
   /** Subscribe to profiler sample changes. */
   subscribeProfiler: (listener: () => void) => Unsubscribe;
+  /** Read a masked snapshot for DevTools panels and debug reports. */
+  getDevtoolsSnapshot: (options?: MeshDevtoolsSnapshotOptions) => MeshDevtoolsSnapshot;
+  /** Subscribe to DevTools snapshot changes. */
+  subscribeDevtools: (listener: () => void) => Unsubscribe;
+  /** Register one StateMesh-aware React component instance for DevTools. */
+  registerDevtoolsComponent: (component: MeshDevtoolsComponentRegistration) => Unsubscribe;
+  /** Record one StateMesh hook/resource/action usage for a tracked component. */
+  recordDevtoolsComponentUsage: (componentId: string, usage: MeshDevtoolsComponentUsage) => void;
   /** Normalize entities into `{ byId, allIds }`. */
   normalizeEntities: <TEntity, TId extends string | number = string | number>(
     entities: readonly TEntity[],

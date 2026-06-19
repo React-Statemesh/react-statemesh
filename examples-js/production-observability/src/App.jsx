@@ -1,5 +1,6 @@
 import React, { Suspense } from "react";
 import {
+  MeshComponent,
   MeshErrorBoundary,
   StateMeshDevtools,
   StateMeshProvider,
@@ -59,14 +60,20 @@ function Profile() {
 export default function App() {
   return (
     <StateMeshProvider mesh={example.mesh}>
-      <MeshErrorBoundary fallbackRender={({ error, reset }) => (
-        <button type="button" onClick={reset}>{error.message}: retry</button>
-      )}>
-        <Suspense fallback={<p>Loading profile</p>}>
-          <Profile />
-        </Suspense>
-      </MeshErrorBoundary>
-      <StateMeshDevtools mesh={example.mesh} showProfiler showDoctor />
+      <MeshComponent name="ProfileScreen">
+        <MeshErrorBoundary fallbackRender={({ error, reset }) => (
+          <button type="button" onClick={reset}>{error.message}: retry</button>
+        )}>
+          <Suspense fallback={<p>Loading profile</p>}>
+            <Profile />
+          </Suspense>
+        </MeshErrorBoundary>
+      </MeshComponent>
+      <StateMeshDevtools
+        mesh={example.mesh}
+        mask={["auth.token"]}
+        defaultView="overview"
+      />
     </StateMeshProvider>
   );
 }

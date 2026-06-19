@@ -33,6 +33,14 @@ import type {
   MeshActionContext,
   MeshDehydratedSnapshot,
   MeshDehydrateOptions,
+  MeshDevtoolsComponentNode,
+  MeshDevtoolsComponentRegistration,
+  MeshDevtoolsComponentUsage,
+  MeshDevtoolsFormRow,
+  MeshDevtoolsMutationRow,
+  MeshDevtoolsResourceRow,
+  MeshDevtoolsSnapshot,
+  MeshDevtoolsSnapshotOptions,
   MeshDoctorOptions,
   MeshDoctorReport,
   MeshGuard,
@@ -171,6 +179,13 @@ type GuardEntry<TState> = {
   handler: MeshGuard<TState>;
 };
 
+type DevtoolsComponentEntry = MeshDevtoolsComponentRegistration & {
+  renderCount: number;
+  lastRenderAt: number;
+  cleanupToken: symbol;
+  usages: Map<string, MeshDevtoolsComponentUsage>;
+};
+
 const DEFAULT_TRANSACTION_STATUS: TransactionStatus = {
   status: "idle",
   pending: false,
@@ -258,6 +273,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   const profilerStarts = new Map<string, number[]>();
   const profilerLimit = Math.max(1, options.profiler?.limit ?? 200);
   const profilerSlowThreshold = Math.max(0, options.profiler?.slowThreshold ?? 16);
+  const devtoolsListeners = new Set<() => void>();
+  const devtoolsComponents = new Map<string, DevtoolsComponentEntry>();
+  const devtoolsPendingComponentUsages = new Map<string, Map<string, MeshDevtoolsComponentUsage>>();
   let profilerSampleCounter = 0;
 
   const batcher = createBatcher(() => {
@@ -320,6 +338,10 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     getProfilerSamples,
     clearProfilerSamples,
     subscribeProfiler,
+    getDevtoolsSnapshot,
+    subscribeDevtools,
+    registerDevtoolsComponent,
+    recordDevtoolsComponentUsage,
     normalizeEntities,
     mergeEntities,
     removeEntities,
@@ -369,6 +391,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
 
   function dispatchEvent(event: MeshEvent): void {
     profileEvent(event);
+    notifyDevtools();
 
     for (const middleware of middlewares) {
       try {
@@ -523,6 +546,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       profilerSamples.splice(0, profilerSamples.length - profilerLimit);
     }
     for (const listener of profilerListeners) listener();
+    notifyDevtools();
   }
 
   function getProfilerSamples(filter: MeshProfilerFilter = {}): MeshProfilerSample[] {
@@ -546,11 +570,185 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     profilerSamples.length = 0;
     profilerStarts.clear();
     for (const listener of profilerListeners) listener();
+    notifyDevtools();
   }
 
   function subscribeProfiler(listener: () => void): Unsubscribe {
     profilerListeners.add(listener);
     return () => profilerListeners.delete(listener);
+  }
+
+  function getDevtoolsSnapshot(snapshotOptions: MeshDevtoolsSnapshotOptions = {}): MeshDevtoolsSnapshot {
+    const previewBytes = snapshotOptions.previewBytes ?? 2_000;
+    const resources = [...resourceEntries.values()]
+      .map((entry): MeshDevtoolsResourceRow | null => {
+        const definition = resourceDefinitions.get(entry.name);
+        if (!definition) return null;
+        const status = createResourceStatus(entry, definition);
+        const data = maskDevtoolsValue(status.data, snapshotOptions.mask, previewBytes);
+        return {
+          ...status,
+          params: createDevtoolsPreview(status.params, previewBytes),
+          data,
+          error: status.error ? sanitizeDevtoolsValue(status.error) : null,
+          pages: status.pages.map((page) => maskDevtoolsValue(page, snapshotOptions.mask, previewBytes)),
+          subscribers: resourceListeners.get(entry.key)?.size ?? 0,
+          preview: data
+        };
+      })
+      .filter((row): row is MeshDevtoolsResourceRow => Boolean(row))
+      .sort((a, b) => `${a.name}:${a.key}`.localeCompare(`${b.name}:${b.key}`));
+    const mutations = [...mutationDefinitions.keys()]
+      .map((mutationName): MeshDevtoolsMutationRow => {
+        const status = getMutationStatus(mutationName);
+        return {
+          ...status,
+          name: mutationName,
+          data: maskDevtoolsValue(status.data, snapshotOptions.mask, previewBytes),
+          error: status.error ? sanitizeDevtoolsValue(status.error) : null,
+          lastPayload: maskDevtoolsValue(status.lastPayload, snapshotOptions.mask, previewBytes)
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const forms = [...formEntries.entries()]
+      .map(([formName, entry]): MeshDevtoolsFormRow => ({
+        name: formName,
+        values: maskDevtoolsValue(entry.state.values, snapshotOptions.mask, previewBytes),
+        errors: { ...entry.state.errors } as Record<string, string>,
+        serverErrors: { ...entry.state.serverErrors } as Record<string, string>,
+        dirtyFields: { ...entry.state.dirtyFields } as Record<string, boolean>,
+        touched: { ...entry.state.touched } as Record<string, boolean>,
+        submitting: entry.state.submitting,
+        autosaving: entry.state.autosaving,
+        currentStep: entry.state.currentStep,
+        stepIndex: entry.state.stepIndex
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const urlStateValues = [...urlStates.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .reduce<Record<string, unknown>>((values, [urlName, entry]) => {
+        values[urlName] = maskDevtoolsValue(entry.values, snapshotOptions.mask, previewBytes);
+        return values;
+      }, {});
+    const components = [...devtoolsComponents.values()]
+      .map((entry): MeshDevtoolsComponentNode => ({
+        id: entry.id,
+        name: entry.name,
+        parentId: entry.parentId,
+        renderCount: entry.renderCount,
+        lastRenderAt: entry.lastRenderAt,
+        usages: [...entry.usages.values()].sort((a, b) => `${a.kind}:${a.name}`.localeCompare(`${b.kind}:${b.name}`))
+      }))
+      .sort((a, b) => (a.parentId ?? "").localeCompare(b.parentId ?? "") || a.name.localeCompare(b.name));
+    const profiler = getProfilerSamples();
+    const report = doctor();
+    const queued = getQueuedMutations().map((mutation) => ({
+      ...mutation,
+      payload: maskDevtoolsValue(mutation.payload, snapshotOptions.mask, previewBytes)
+    }));
+
+    return {
+      mesh: name,
+      generatedAt: Date.now(),
+      state: snapshotOptions.state === false ? undefined : maskDevtoolsValue(state, snapshotOptions.mask, previewBytes),
+      resources,
+      mutations,
+      forms,
+      urlStates: urlStateValues,
+      queuedMutations: queued,
+      components,
+      profiler,
+      doctor: report,
+      summary: {
+        stateKeys: countDevtoolsStateKeys(state),
+        resources: resources.length,
+        resourceErrors: resources.filter((resource) => resource.status === "error").length,
+        staleResources: resources.filter((resource) => resource.stale).length,
+        activeMutations: mutations.filter((mutation) => mutation.pending).length,
+        queuedMutations: queued.length,
+        forms: forms.length,
+        formErrors: forms.filter((form) => Object.keys(form.errors).length > 0 || Object.keys(form.serverErrors).length > 0).length,
+        components: components.length,
+        slowOperations: profiler.filter((sample) => sample.slow).length,
+        doctorErrors: report.summary.errors,
+        doctorWarnings: report.summary.warnings
+      }
+    };
+  }
+
+  function subscribeDevtools(listener: () => void): Unsubscribe {
+    devtoolsListeners.add(listener);
+    return () => devtoolsListeners.delete(listener);
+  }
+
+  function registerDevtoolsComponent(component: MeshDevtoolsComponentRegistration): Unsubscribe {
+    const cleanupToken = Symbol(component.id);
+    const existing = devtoolsComponents.get(component.id);
+    if (existing) {
+      existing.name = component.name;
+      existing.parentId = component.parentId;
+      existing.renderCount += 1;
+      existing.lastRenderAt = Date.now();
+      existing.cleanupToken = cleanupToken;
+      applyPendingDevtoolsComponentUsages(existing);
+    } else {
+      const entry: DevtoolsComponentEntry = {
+        ...component,
+        parentId: component.parentId,
+        renderCount: 1,
+        lastRenderAt: Date.now(),
+        cleanupToken,
+        usages: new Map()
+      };
+      applyPendingDevtoolsComponentUsages(entry);
+      devtoolsComponents.set(component.id, entry);
+    }
+    notifyDevtools();
+    return () => {
+      setTimeout(() => {
+        const current = devtoolsComponents.get(component.id);
+        if (current?.cleanupToken !== cleanupToken) return;
+        devtoolsComponents.delete(component.id);
+        notifyDevtools();
+      }, 0);
+    };
+  }
+
+  function recordDevtoolsComponentUsage(componentId: string, usage: MeshDevtoolsComponentUsage): void {
+    const entry = devtoolsComponents.get(componentId);
+    if (!entry) {
+      let pending = devtoolsPendingComponentUsages.get(componentId);
+      if (!pending) {
+        pending = new Map();
+        devtoolsPendingComponentUsages.set(componentId, pending);
+      }
+      pending.set(`${usage.kind}:${usage.name}`, {
+        ...usage,
+        details: usage.details ? { ...usage.details } : undefined
+      });
+      return;
+    }
+    entry.usages.set(`${usage.kind}:${usage.name}`, {
+      ...usage,
+      details: usage.details ? { ...usage.details } : undefined
+    });
+    entry.lastRenderAt = Date.now();
+    notifyDevtools();
+  }
+
+  function applyPendingDevtoolsComponentUsages(entry: DevtoolsComponentEntry): void {
+    const pending = devtoolsPendingComponentUsages.get(entry.id);
+    if (!pending) return;
+    for (const [key, usage] of pending) {
+      entry.usages.set(key, usage);
+    }
+    devtoolsPendingComponentUsages.delete(entry.id);
+  }
+
+  function notifyDevtools(): void {
+    for (const listener of devtoolsListeners) {
+      listener();
+    }
   }
 
   function doctor(doctorOptions: MeshDoctorOptions = {}): MeshDoctorReport {
@@ -772,6 +970,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     profilerSamples.length = 0;
     profilerListeners.clear();
     profilerStarts.clear();
+    devtoolsListeners.clear();
+    devtoolsComponents.clear();
+    devtoolsPendingComponentUsages.clear();
     for (const runtime of mutationRuntime.values()) {
       runtime.controller?.abort();
     }
@@ -881,13 +1082,13 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       throw new GuardError(typeof result === "object" && result.reason
         ? result.reason
         : `StateMesh guard blocked ${kind} "${operationName}".`, {
-          metadata: {
-            mesh: name,
-            kind,
-            name: operationName,
-            ...(typeof result === "object" ? result.metadata : undefined)
-          }
-        });
+        metadata: {
+          mesh: name,
+          kind,
+          name: operationName,
+          ...(typeof result === "object" ? result.metadata : undefined)
+        }
+      });
     }
   }
 
@@ -2277,6 +2478,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     const status = normalizeMutationStatus({ ...current, ...partial });
     mutationStatuses.set(mutationName, status);
     for (const listener of mutationListeners.get(mutationName) ?? []) listener();
+    notifyDevtools();
   }
 
   function normalizeMutationStatus(status: MutationStatus): MutationStatus {
@@ -2301,6 +2503,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   function resetMutation(mutationName: string): void {
     mutationStatuses.set(mutationName, { ...DEFAULT_MUTATION_STATUS });
     for (const listener of mutationListeners.get(mutationName) ?? []) listener();
+    notifyDevtools();
   }
 
   function getQueuedMutations(): QueuedMutation[] {
@@ -2478,6 +2681,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
 
   function notifyMutationQueueChanged(): void {
     for (const listener of mutationQueueListeners) listener();
+    notifyDevtools();
   }
 
   function updateMutationQueueSize(mutationName: string): void {
@@ -2734,6 +2938,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       },
       write
     } as UrlStateEntry<Record<string, unknown>>);
+    notifyDevtools();
   }
 
   function getUrlState<TValues extends Record<string, unknown>>(urlName: string): TValues {
@@ -2797,6 +3002,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     };
     entry.autosave = createFormAutosave(formName, entry);
     formEntries.set(formName, entry);
+    notifyDevtools();
     if (existing && replace) {
       notifyForm(formName);
     }
@@ -2997,6 +3203,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     const entry = formEntries.get(formName);
     if (!entry) return;
     for (const listener of entry.listeners) listener();
+    notifyDevtools();
     dispatchEvent({ type: "form.changed", name: formName, field, timestamp: Date.now() });
   }
 
@@ -3704,6 +3911,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     for (const listener of resourceChangeListeners) {
       listener();
     }
+    notifyDevtools();
   }
 
   function normalizeInvalidation(invalidation?: ResourceInvalidation): {
@@ -3776,6 +3984,98 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       for (const listener of resourceListeners.get(key) ?? []) listener();
     }
   }
+}
+
+function maskDevtoolsValue(value: unknown, mask: readonly MeshPath[] | undefined, previewBytes: number): unknown {
+  let next = sanitizeDevtoolsValue(value);
+  for (const path of mask ?? []) {
+    next = setValueAtPath(next, path, "[StateMesh masked]");
+  }
+  return createDevtoolsPreview(next, previewBytes);
+}
+
+function createDevtoolsPreview(value: unknown, previewBytes: number): unknown {
+  const safe = sanitizeDevtoolsValue(value);
+  const serialized = stringifyDevtoolsValue(safe);
+  if (serialized.length <= previewBytes) return safe;
+  return {
+    type: "large-value",
+    bytes: serialized.length,
+    preview: serialized.slice(0, previewBytes)
+  };
+}
+
+function sanitizeDevtoolsValue(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "bigint") return `${value.toString()}n`;
+  if (typeof value === "symbol") return value.toString();
+  if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message
+    };
+  }
+  if (value instanceof Date) return value.toISOString();
+  if (typeof File !== "undefined" && value instanceof File) {
+    return {
+      type: "File",
+      name: value.name,
+      size: value.size,
+      mime: value.type,
+      lastModified: value.lastModified
+    };
+  }
+  if (typeof Blob !== "undefined" && value instanceof Blob) {
+    return {
+      type: "Blob",
+      size: value.size,
+      mime: value.type
+    };
+  }
+
+  if (typeof value !== "object") return String(value);
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeDevtoolsValue(item, seen));
+  }
+
+  if (value instanceof Map) {
+    return {
+      type: "Map",
+      entries: [...value.entries()].map(([key, item]) => [sanitizeDevtoolsValue(key, seen), sanitizeDevtoolsValue(item, seen)])
+    };
+  }
+
+  if (value instanceof Set) {
+    return {
+      type: "Set",
+      values: [...value.values()].map((item) => sanitizeDevtoolsValue(item, seen))
+    };
+  }
+
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).sort().reduce<Record<string, unknown>>((output, key) => {
+    output[key] = sanitizeDevtoolsValue(record[key], seen);
+    return output;
+  }, {});
+}
+
+function stringifyDevtoolsValue(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value, null, 2);
+    return serialized === undefined ? "undefined" : serialized;
+  } catch {
+    return String(value);
+  }
+}
+
+function countDevtoolsStateKeys(value: unknown): number {
+  if (!value || typeof value !== "object") return 0;
+  return Array.isArray(value) ? value.length : Object.keys(value).length;
 }
 
 function updateError<TValues extends Record<string, unknown>, K extends keyof TValues & string>(

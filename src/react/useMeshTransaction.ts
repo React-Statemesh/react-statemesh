@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import type { TransactionHandle, TransactionStatus } from "../core/types";
 import { shallowEqual } from "../utils";
+import { useMeshComponentUsage } from "./componentTracking";
 import { useMesh } from "./useMesh";
 
 /**
@@ -25,6 +26,7 @@ export function useMeshTransaction<TPayload = void, TResult = unknown, TState = 
 ): TransactionHandle<TPayload, TResult> {
   const mesh = useMesh<TState>();
   const transactionName = typeof nameOrTransaction === "string" ? nameOrTransaction : nameOrTransaction.transactionName;
+  useMeshComponentUsage({ kind: "transaction", name: transactionName });
   const lastStatusRef = useRef<TransactionStatus<TResult> | null>(null);
 
   const subscribe = useCallback((listener: () => void) => mesh.subscribeTransaction(transactionName, listener), [mesh, transactionName]);

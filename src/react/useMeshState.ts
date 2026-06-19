@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import type { MeshPath } from "../core/types";
+import { useMeshComponentUsage } from "./componentTracking";
 import { useMesh } from "./useMesh";
 import { useMeshSelector } from "./useMeshSelector";
 
@@ -18,6 +19,7 @@ export function useMeshState<TValue = unknown, TState = unknown>(
   path: MeshPath
 ): readonly [TValue, (valueOrUpdater: TValue | ((current: TValue) => TValue)) => void] {
   const mesh = useMesh<TState>();
+  useMeshComponentUsage({ kind: "state", name: describePath(path) });
   const value = useMeshSelector<TState, TValue>(path);
 
   const setValue = useCallback(
@@ -28,4 +30,8 @@ export function useMeshState<TValue = unknown, TState = unknown>(
   );
 
   return [value, setValue] as const;
+}
+
+function describePath(path: MeshPath): string {
+  return Array.isArray(path) ? path.join(".") : String(path);
 }

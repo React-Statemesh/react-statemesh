@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import type { MutationHandle, MutationStatus } from "../core/types";
 import { shallowEqual } from "../utils";
+import { useMeshComponentUsage } from "./componentTracking";
 import { useMesh } from "./useMesh";
 
 /**
@@ -17,6 +18,7 @@ export function useMeshMutation<TPayload = void, TResult = unknown, TState = unk
 ): MutationHandle<TPayload, TResult> {
   const mesh = useMesh<TState>();
   const mutationName = typeof nameOrMutation === "string" ? nameOrMutation : nameOrMutation.mutationName;
+  useMeshComponentUsage({ kind: "mutation", name: mutationName });
   const lastStatusRef = useRef<MutationStatus<TResult> | null>(null);
 
   const subscribe = useCallback((listener: () => void) => mesh.subscribeMutation(mutationName, listener), [mesh, mutationName]);

@@ -698,31 +698,70 @@ const stopGuard = mesh.guard({ kind: "action", name: /^admin\./ }, ({ state }) =
 
 When a guard blocks an operation, StateMesh throws `GuardError` before mutating state or starting the API effect.
 
-For development, you can render a lightweight in-app timeline:
+For development and QA, you can render the in-app DevTools dock:
 
 ```tsx
-import { StateMeshDevtools } from "react-statemesh/devtools";
+import { MeshComponent, StateMeshDevtools } from "react-statemesh";
 
 function App() {
   return (
     <StateMeshProvider mesh={mesh}>
-      <Routes />
-      <StateMeshDevtools mesh={mesh} />
+      <MeshComponent name="AppShell">
+        <Routes />
+      </MeshComponent>
+      <StateMeshDevtools
+        mesh={mesh}
+        mask={["auth.token", "user.email"]}
+        previewBytes={2000}
+        defaultView="overview"
+      />
     </StateMeshProvider>
   );
 }
 ```
 
-The DevTools timeline supports event search, category filtering, failed-only filtering, and JSON export/copy for bug reports.
+The DevTools UI docks to the bottom of the page, can minimize to a floating launcher, and can maximize into a larger bottom panel. It includes tabs for:
 
-Enable the profiler and Doctor tabs when you want production-readiness diagnostics while developing:
+- overview health counts
+- state snapshot
+- action and transaction timeline
+- resource cache entries with refetch/invalidate controls
+- mutation status and offline queue controls
+- form values, errors, dirty fields, touched fields, and step state
+- URL state
+- tracked React component usage
+- profiler samples
+- Doctor diagnostics
+- raw event timeline with search, category, failed-only filtering, and export
+
+`mask` is applied before rendering state/form/url/resource/mutation data or exporting a debug report. Large values are converted into bounded previews with `previewBytes`.
+
+Track the component tree by wrapping important UI areas with `MeshComponent`. StateMesh hooks used inside that boundary are attached to the nearest tracked component:
 
 ```tsx
-<StateMeshDevtools
-  mesh={mesh}
-  showProfiler
-  showDoctor
-/>
+function ProductScreen() {
+  return (
+    <MeshComponent name="ProductScreen">
+      <ProductFilters />
+      <ProductList />
+    </MeshComponent>
+  );
+}
+```
+
+The Components tab will show the tracked component name, render count, parent id, and captured StateMesh usages such as state paths, selectors, resources, mutations, forms, actions, transactions, URL state, and computed values. For custom instrumentation, call `useMeshComponent("Name")` or `useMeshComponentUsage({ kind: "resource", name: "products.list" })`.
+
+You can also inspect or export the same safe snapshot programmatically:
+
+```ts
+const snapshot = mesh.getDevtoolsSnapshot({
+  mask: ["auth.token"],
+  previewBytes: 4000
+});
+
+const unsubscribe = mesh.subscribeDevtools(() => {
+  console.log(mesh.getDevtoolsSnapshot().summary);
+});
 ```
 
 The profiler records bounded samples for named actions, transactions, resources, mutations, form submits/autosaves, and computed values:

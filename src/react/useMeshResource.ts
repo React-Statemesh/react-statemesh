@@ -6,6 +6,7 @@ import type {
   ResourceSetDataOptions,
   ResourceStatus
 } from "../core/types";
+import { useMeshComponentUsage } from "./componentTracking";
 import { useMesh } from "./useMesh";
 
 /** Options for `useMeshResource`. */
@@ -62,6 +63,7 @@ export function useMeshResource<TParams = void, TData = unknown, TState = unknow
   const mesh = useMesh<TState>();
   const resourceName = typeof nameOrResource === "string" ? nameOrResource : nameOrResource.resourceName;
   const paramsKey = stableHookHash(params);
+  useMeshComponentUsage({ kind: "resource", name: resourceName, details: { paramsKey } });
   const lastStatusRef = useRef<ResourceStatus<TData, TParams> | null>(null);
   const lastDataRef = useRef<TData | null>(null);
 

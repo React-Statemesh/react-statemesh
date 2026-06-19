@@ -12,7 +12,9 @@ import {
   type ApiRetryOptions,
   type MeshDehydratedSnapshot,
   type MeshDoctorReport,
+  type MeshDevtoolsSnapshot,
   type MeshErrorBoundaryProps,
+  type MeshComponentProps,
   type MeshErrorResetBoundaryValue,
   type MeshProfilerSample,
   type QueuedMutation,
@@ -21,6 +23,8 @@ import {
   type StateMeshProviderProps,
   zodSchema,
   useMeshAction,
+  useMeshComponent,
+  useMeshComponentUsage,
   useMeshMutation,
   useMeshResource,
   useMeshTransaction,
@@ -102,6 +106,31 @@ expectType<MeshDoctorReport>(mesh.doctor({ staleResourceWarning: "5m" }));
 expectType<MeshProfilerSample[]>(mesh.getProfilerSamples({ kinds: ["action"], slowOnly: true }));
 expectType<void>(mesh.clearProfilerSamples());
 expectType<() => void>(mesh.subscribeProfiler(() => undefined));
+expectType<MeshDevtoolsSnapshot>(mesh.getDevtoolsSnapshot({
+  mask: ["cart.items"],
+  previewBytes: 1000,
+  state: true
+}));
+expectType<() => void>(mesh.subscribeDevtools(() => undefined));
+expectType<() => void>(mesh.registerDevtoolsComponent({
+  id: "component_1",
+  name: "CartPanel",
+  parentId: null
+}));
+expectType<void>(mesh.recordDevtoolsComponentUsage("component_1", {
+  kind: "resource",
+  name: "products.list",
+  details: { paramsKey: "all" }
+}));
+expectType<string>(useMeshComponent("CartPanel", { id: "cart-panel", parentId: null }));
+expectType<void>(useMeshComponentUsage({ kind: "state", name: "cart.items" }));
+
+const componentProps: MeshComponentProps = {
+  name: "CartPanel",
+  id: "cart-panel",
+  children: null
+};
+expectType<MeshComponentProps>(componentProps);
 
 const boundaryProps: MeshErrorBoundaryProps = {
   children: null,

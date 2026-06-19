@@ -1,6 +1,7 @@
 export * from "./context";
 export * from "./StateMeshProvider";
 export * from "./useMesh";
+export * from "./componentTracking";
 export * from "./useMeshState";
 export * from "./useMeshSelector";
 export * from "./useMeshAction";

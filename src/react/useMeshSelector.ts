@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { MeshPath } from "../core/types";
 import type { EqualityFn } from "../utils";
+import { useMeshComponentUsage } from "./componentTracking";
 import { useMesh } from "./useMesh";
 
 /**
@@ -21,6 +22,7 @@ export function useMeshSelector<TState = unknown, TSelected = unknown>(
   equality: EqualityFn<TSelected> = Object.is
 ): TSelected {
   const mesh = useMesh<TState>();
+  useMeshComponentUsage({ kind: "selector", name: describeSelector(selector) });
 
   const subscribe = useCallback(
     (listener: () => void) =>
@@ -36,4 +38,9 @@ export function useMeshSelector<TState = unknown, TSelected = unknown>(
   const getServerSnapshot = useCallback(() => mesh.getSelectedServerSnapshot(selector), [mesh, selector]);
 
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+}
+
+function describeSelector(selector: unknown): string {
+  if (typeof selector === "function") return selector.name || "selector";
+  return Array.isArray(selector) ? selector.join(".") : String(selector);
 }

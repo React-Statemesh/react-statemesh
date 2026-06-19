@@ -3,6 +3,7 @@ import { Suspense, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createMesh,
+  MeshComponent,
   MeshErrorBoundary,
   ProviderError,
   StateMeshProvider,
@@ -94,6 +95,46 @@ describe("React hooks", () => {
     await waitFor(() => expect(screen.getByText("todos:1")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "add" }));
     await waitFor(() => expect(screen.getByText("todos:2")).toBeTruthy());
+  });
+
+  it("tracks StateMesh hook usage under MeshComponent boundaries", async () => {
+    const mesh = createMesh({
+      state: {
+        count: 1
+      }
+    });
+    const profileResource = mesh.resource("profile.read", {
+      async fetch() {
+        return { name: "Ada" };
+      },
+      tags: ["profile"]
+    });
+
+    function Dashboard() {
+      const [count] = useMeshState<number>("count");
+      const profile = useMeshResource(profileResource);
+      return <span>{profile.data?.name ?? count}</span>;
+    }
+
+    const view = render(
+      <StateMeshProvider mesh={mesh}>
+        <MeshComponent name="Dashboard">
+          <Dashboard />
+        </MeshComponent>
+      </StateMeshProvider>
+    );
+
+    await waitFor(() => expect(screen.getByText("Ada")).toBeTruthy());
+    await waitFor(() => {
+      const tracked = mesh.getDevtoolsSnapshot().components.find((component) => component.name === "Dashboard");
+      expect(tracked?.renderCount).toBeGreaterThan(0);
+      expect(tracked?.usages.some((usage) => usage.kind === "state" && usage.name === "count")).toBe(true);
+      expect(tracked?.usages.some((usage) => usage.kind === "resource" && usage.name === "profile.read")).toBe(true);
+    });
+
+    view.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mesh.getDevtoolsSnapshot().components).toHaveLength(0);
   });
 
   it("supports resource placeholder data and selectors", async () => {
