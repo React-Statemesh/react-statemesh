@@ -142,6 +142,62 @@ function CartTotal() {
 
 Computed values are cached and recompute when their dependency paths change.
 
+For selector-heavy components, `createSelector` creates a memoized selector that only recomputes when its dependency inputs change. This avoids unnecessary work on every render when the underlying data has not shifted:
+
+```tsx
+import { createSelector } from "react-statemesh";
+
+const selectCartCount = createSelector(
+  (state: AppState) => state.cart.items,
+  (items) => items.reduce((total, item) => total + item.quantity, 0)
+);
+
+const selectCartTotal = createSelector(
+  (state: AppState) => state.cart.items,
+  (items) => items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+);
+
+function CartBadge() {
+  const count = useMeshSelector(selectCartCount);
+  return <span>Cart: {count}</span>;
+}
+
+function CartTotal() {
+  const total = useMeshSelector(selectCartTotal);
+  return <strong>Total: {total}</strong>;
+}
+```
+
+`createSelector` takes one or more input selectors followed by a combiner function. It caches the last result and only recomputes when any input selector returns a new reference.
+
+## Batch Operations
+
+`mesh.batch` groups multiple state mutations into a single subscription notification. This is useful when different subsystems or actions need to update related state without intermediate re-renders or duplicate subscription callbacks:
+
+```ts
+// Without batch — two separate notifications
+setTheme("dark");
+setFontSize(18);
+
+// With batch — one notification, subscribers fire once
+mesh.batch(() => {
+  setTheme("dark");
+  setFontSize(18);
+});
+```
+
+`mesh.batch` accepts a callback that receives the mesh itself. Mutations inside the callback are coalesced so computed values and subscribers only see the final state:
+
+```ts
+mesh.batch((m) => {
+  m.setPath("cart.status", "processing");
+  m.setPath("cart.error", null);
+  m.setPath("ui.checkoutButton", "disabled");
+});
+```
+
+If the callback throws, no state changes from the batch take effect. `batch` also works with actions and other mesh methods that mutate state.
+
 ## Transactions
 
 Transactions own the full lifecycle: validation, snapshot, optimistic update, effect, commit, rollback, retry, timeout, cancellation, status, and logging.
@@ -240,6 +296,19 @@ export const productsResource = mesh.resource("products.list", {
     });
   },
   tags: [{ type: "products" }]
+});
+```
+
+For high-churn data sources (search results, audit logs, paginated feeds), set `maxCacheEntries` to bound per-resource memory usage. When the cache exceeds the limit, the oldest unused entry is evicted first:
+
+```ts
+const auditResource = mesh.resource("audit.log", {
+  staleTime: "30s",
+  maxCacheEntries: 5,
+  key: () => "recent",
+  async fetch(_void, ctx) {
+    return api.get<AuditPage>("/audit/recent", { signal: ctx.signal });
+  }
 });
 ```
 
@@ -882,9 +951,9 @@ TypeScript React examples:
 
 The `realworld-support-desk` example is the full production workflow reference. It combines persisted UI state, URL filters, computed state, the API client, resource cache, prefetch, SSR cache hydration, entity helpers, optimistic/offline mutations, invalidation/refetch, production forms, async validation, autosave, field arrays, multi-step form state, tab sync, logger hooks, and in-app devtools.
 
-The `production-upgrades` example focuses on the newer daily-app helpers: resource `keepPreviousData`/`placeholderData`/`select`, relative API bases, URL dynamic param capture, action guards, and checkbox/radio/select/file form helpers.
+The `production-upgrades` example focuses on the newer daily-app helpers: resource `keepPreviousData`/`placeholderData`/`select`, relative API bases, URL dynamic param capture, action guards, checkbox/radio/select/file form helpers, and `maxCacheEntries` for bounded resource caches.
 
-The `production-observability` example combines Suspense resources, reset-aware error handling, Doctor diagnostics, and the performance profiler.
+The `production-observability` example combines Suspense resources, reset-aware error handling, Doctor diagnostics, the performance profiler, `createSelector` memoized selectors, and `mesh.batch` grouped state updates.
 
 Plain JavaScript React examples:
 

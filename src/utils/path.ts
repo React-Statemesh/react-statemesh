@@ -1,15 +1,30 @@
 /** Path value accepted by StateMesh path helpers. */
 export type Path = string | readonly (string | number)[];
 
+// Cache of parsed path segments keyed by the original path string.
+// Path strings are typically constant literals in user code (e.g. "cart.items"),
+// so the cache hit rate is near 100% and we avoid repeated string splitting.
+const pathCache = new Map<string, Array<string | number>>();
+
 /** Convert a dot path or array path into normalized path segments. */
 export function parsePath(path: Path): Array<string | number> {
   if (typeof path !== "string") return [...path];
   if (path.trim() === "") return [];
 
-  return path.split(".").map((part: string) => {
+  const cached = pathCache.get(path);
+  if (cached) return cached;
+
+  const parts = path.split(".").map((part: string) => {
     const numeric = Number(part);
     return Number.isInteger(numeric) && part.trim() !== "" && String(numeric) === part ? numeric : part;
   });
+
+  // Bounded cache to prevent unbounded memory growth from dynamic paths.
+  if (pathCache.size < 1_000) {
+    pathCache.set(path, parts);
+  }
+
+  return parts;
 }
 
 /** Read a nested value by path. Returns `undefined` when any segment is missing. */

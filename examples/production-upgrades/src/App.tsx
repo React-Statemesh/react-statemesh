@@ -27,6 +27,12 @@ type SettingsValues = {
   avatar: File | null;
 };
 
+type AuditEntry = {
+  id: string;
+  action: string;
+  timestamp: number;
+};
+
 const products: Product[] = [
   { id: "keyboard", name: "Keyboard", category: "hardware" },
   { id: "mouse", name: "Mouse", category: "hardware" },
@@ -51,6 +57,14 @@ export function createProductionUpgradesExample() {
       if (url.pathname === "/api/products") {
         const search = url.searchParams.get("q") ?? "";
         return Response.json(products.filter((product) => product.name.toLowerCase().includes(search.toLowerCase())));
+      }
+      if (url.pathname === "/api/audit") {
+        return Response.json({
+          entries: [
+            { id: "audit_1", action: "reports.export", timestamp: Date.now() - 60000 },
+            { id: "audit_2", action: "settings.updated", timestamp: Date.now() - 30000 }
+          ] satisfies AuditEntry[]
+        });
       }
       return Response.json({ ok: true });
     }
@@ -84,6 +98,18 @@ export function createProductionUpgradesExample() {
     tags: ["products"]
   });
 
+  // Resource with a bounded cache — limits memory usage for high-churn data.
+  // Only 5 entries are kept; oldest unused entries are evicted first.
+  const auditResource = mesh.resource("audit.log", {
+    staleTime: "30s",
+    maxCacheEntries: 5,
+    key: () => "recent",
+    async fetch(_: void, ctx) {
+      return api.get<{ entries: AuditEntry[] }>("/api/audit", { signal: ctx.signal });
+    },
+    tags: ["audit"]
+  });
+
   const exportReport = mesh.action("reports.export", (state) => {
     state.exports += 1;
   });
@@ -108,7 +134,8 @@ export function createProductionUpgradesExample() {
   return {
     mesh,
     productsResource,
-    exportReport
+    exportReport,
+    auditResource
   };
 }
 

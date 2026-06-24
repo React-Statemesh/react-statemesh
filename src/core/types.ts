@@ -966,6 +966,9 @@ export type ResourceDefinition<TState, TParams = void, TData = unknown, TPagePar
   getNextPageParam?: (lastPage: TData, pages: TData[], params: TParams) => TPageParam | null | undefined;
   /** Merge fetched pages into the public `data` value. Defaults to the latest page. */
   mergePages?: (pages: TData[], params: TParams) => TData;
+  /** Maximum number of cache entries for this resource. Oldest entries with no active
+   *  subscribers are evicted when this limit is reached. Defaults to `Infinity`. */
+  maxCacheEntries?: number;
 };
 
 /** Runtime status for one resource cache entry. */
@@ -1568,6 +1571,18 @@ export type Mesh<TState = unknown> = {
   snapshot: (label?: string) => Snapshot<TState>;
   /** Restore a snapshot by ID. */
   restore: (snapshotId: string) => void;
+  /** Run multiple state mutations atomically. State updates inside the callback
+   *  are batched into a single notification flush and a single `state.changed` event.
+   *  Returns the return value of the callback.
+   *
+   * @example
+   * ```ts
+   * mesh.batch(() => {
+   *   mesh.setPath("cart.items", []);
+   *   mesh.setPath("order.status", "completed");
+   * });
+   * ``` */
+  batch: <T>(fn: () => T) => T;
   /** Register middleware for events. */
   middleware: (handler: MeshMiddleware<TState>) => Unsubscribe;
   /** Register a guard that can block actions, transactions, or mutations before they run. */

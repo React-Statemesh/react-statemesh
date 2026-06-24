@@ -1,6 +1,16 @@
 # Changelog
 
-## 0.1.0
+## 0.2.0
+
+- **Performance: skip clone on no-op actions.** Actions that produce the same state as the current snapshot skip the clone-and-commit cycle entirely. `shallowEqual(state, draft)` guards every action run.
+- **Performance: path tokenization cache.** Repeated `path.split('.')` calls (from `getPath`, `setPath`, computed deps, subscriptions) are cached per path string via a shared `splitPath` module.
+- **Performance: stable status references.** `getResourceStatus`, `getTransactionStatus`, and `getMutationStatus` return the same object reference when their underlying state has not changed, reducing unnecessary React re-renders.
+- **Performance: profiler hot-path filter.** Profiled event type checks use a module-scoped `Set` for O(1) lookups. Unprofiled events like `state.changed` are skipped without a function call.
+- **Performance: DevTools snapshot throttling.** DevTools notifications are throttled to once per animation frame (~16ms). Rapid state changes are batched into a single DevTools render.
+- **Performance: LRU resource cache eviction.** Resources accept `maxCacheEntries` to limit memory usage. When the cache exceeds the limit, the oldest unused entry is evicted first.
+- **Feature: `createSelector` memoized selector.** Exported from `react-statemesh`. Creates a stable memoized selector with explicit dependency tracking — only recomputes when any dependency changes.
+- **Feature: batch operations (`mesh.batch`).** Every mesh instance exposes `batch(fn)` to group multiple state mutations into a single subscription notification. Useful for coordinating state changes across different subsystems.
+- **Resource `maxCacheEntries` option.** Bounds the per-resource cache size. Configurable per-resource without modifying the mesh's shared defaults.
 
 - Initial production-focused StateMesh package scaffold.
 - Adds core mesh store, React bindings, actions, computed values, transactions, persistence, URL state, forms, tab sync, errors, logger bridge, testing utilities, examples, and documentation.

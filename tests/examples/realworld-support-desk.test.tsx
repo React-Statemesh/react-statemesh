@@ -53,7 +53,7 @@ describe("realworld support desk example", () => {
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Ada" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Record refresh" }));
-    expect(screen.getByText("Refreshes: 1")).toBeTruthy();
+    expect(screen.getByText(/Refreshes: 1/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Profiler" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Doctor" })).toBeTruthy();
   });

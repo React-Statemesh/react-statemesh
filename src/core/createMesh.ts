@@ -14,7 +14,7 @@ import {
   UrlStateError
 } from "../errors";
 import { resolveStorageAdapter } from "../persist/storage";
-import { createBatcher, cloneState, debounce, getPath, isBrowser, pickPaths, setPath as setValueAtPath } from "../utils";
+import { createBatcher, cloneState, debounce, getPath, isBrowser, pickPaths, shallowEqual, setPath as setValueAtPath } from "../utils";
 import type { EqualityFn } from "../utils";
 import type {
   ComputedDefinition,
@@ -236,11 +236,28 @@ let idCounter = 0;
  * });
  * ```
  */
+
+// Module-level constant — never changes, so extract it from the closure to avoid
+// temporal-dead-zone issues with hoisted function declarations referencing it.
+const PROFILED_EVENT_TYPES = new Set([
+  "action.started", "action.completed", "action.failed",
+  "transaction.started", "transaction.committed", "transaction.failed", "transaction.cancelled",
+  "resource.fetch.started", "resource.fetch.succeeded", "resource.fetch.failed",
+  "mutation.started", "mutation.succeeded", "mutation.failed",
+  "form.submit.started", "form.submit.succeeded", "form.submit.failed",
+  "form.autosave.started", "form.autosave.succeeded", "form.autosave.failed"
+]);
+
 export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   const name = options.name ?? "statemesh";
   const initialState = cloneState(options.state);
   let state = cloneState(options.state);
   let destroyed = false;
+
+  // Hoisted to the top so hoisted function declarations (e.g. profileEvent, notifyDevtools,
+  // getResourceStatus) can reference them without temporal-dead-zone errors.
+  let devtoolsNotifyTimer: ReturnType<typeof setTimeout> | null = null;
+  const lastResourceStatuses = new Map<string, ResourceStatus>();
 
   const subscriptions = new Set<Subscription<TState, unknown>>();
   const eventListeners = new Set<(event: MeshEvent) => void | Promise<void>>();
@@ -359,6 +376,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     subscribeForm,
     snapshot,
     restore,
+    batch,
     middleware,
     guard,
     use,
@@ -410,97 +428,94 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     }
   }
 
+  // Set of event types the profiler tracks. Using a Set gives O(1) lookup for the
+  // Fast-path: skip events the profiler doesn't track (e.g. state.changed, url.changed, form.changed)
   function profileEvent(event: MeshEvent): void {
+    if (!PROFILED_EVENT_TYPES.has(event.type)) return;
+
     switch (event.type) {
       case "action.started":
-        startProfilerSample("action", event.name, `action:${event.name}`, event.timestamp);
-        return;
       case "transaction.started":
-        startProfilerSample("transaction", event.name, `transaction:${event.name}`, event.timestamp);
+      case "mutation.started":
+      case "form.submit.started":
+      case "form.autosave.started":
+        startProfilerSample(
+          event.type === "action.started" ? "action" as const
+            : event.type === "transaction.started" ? "transaction" as const
+            : event.type === "mutation.started" ? "mutation" as const
+            : "form" as const,
+          event.name,
+          event.type === "mutation.started" ? `mutation:${event.name}`
+            : event.type.startsWith("form.") ? `form:${event.type.split(".")[1]}:${event.name}`
+            : `${event.type.split(".")[0]}:${event.name}`,
+          event.timestamp
+        );
         return;
+
+      case "action.completed":
+      case "action.failed":
+        event.type === "action.completed"
+          ? finishProfilerSample("action", event.name, `action:${event.name}`, "success", event.timestamp, event.duration, event.metadata)
+          : finishProfilerSample("action", event.name, `action:${event.name}`, "error", event.timestamp, undefined, {
+              ...event.metadata,
+              error: getProfilerErrorCode((event as MeshEvent & { error: unknown }).error)
+            });
+        return;
+
+      case "transaction.committed":
+      case "transaction.failed":
+      case "transaction.cancelled":
+        finishProfilerSample(
+          "transaction", event.name, `transaction:${event.name}`,
+          event.type === "transaction.committed" ? "success" as const
+            : event.type === "transaction.cancelled" ? "cancelled" as const
+            : "error" as const,
+          event.timestamp,
+          event.type === "transaction.committed" ? event.duration : undefined,
+          event.type !== "transaction.committed"
+            ? { ...event.metadata, error: getProfilerErrorCode((event as MeshEvent & { error: unknown }).error) }
+            : event.metadata
+        );
+        return;
+
       case "resource.fetch.started":
         startProfilerSample("resource", event.name, `resource:${event.key}`, event.timestamp);
         return;
-      case "mutation.started":
-        startProfilerSample("mutation", event.name, `mutation:${event.name}`, event.timestamp);
-        return;
-      case "form.submit.started":
-        startProfilerSample("form", event.name, `form:submit:${event.name}`, event.timestamp);
-        return;
-      case "form.autosave.started":
-        startProfilerSample("form", event.name, `form:autosave:${event.name}`, event.timestamp);
-        return;
-      case "action.completed":
-        finishProfilerSample("action", event.name, `action:${event.name}`, "success", event.timestamp, event.duration, event.metadata);
-        return;
-      case "action.failed":
-        finishProfilerSample("action", event.name, `action:${event.name}`, "error", event.timestamp, undefined, {
-          ...event.metadata,
-          error: getProfilerErrorCode(event.error)
-        });
-        return;
-      case "transaction.committed":
-        finishProfilerSample("transaction", event.name, `transaction:${event.name}`, "success", event.timestamp, event.duration, event.metadata);
-        return;
-      case "transaction.failed":
-        finishProfilerSample("transaction", event.name, `transaction:${event.name}`, "error", event.timestamp, undefined, {
-          ...event.metadata,
-          error: getProfilerErrorCode(event.error)
-        });
-        return;
-      case "transaction.cancelled":
-        finishProfilerSample("transaction", event.name, `transaction:${event.name}`, "cancelled", event.timestamp, undefined, event.metadata);
-        return;
+
       case "resource.fetch.succeeded":
-        finishProfilerSample("resource", event.name, `resource:${event.key}`, "success", event.timestamp, event.duration, {
-          ...event.metadata,
-          key: event.key
-        });
-        return;
       case "resource.fetch.failed":
-        finishProfilerSample("resource", event.name, `resource:${event.key}`, "error", event.timestamp, undefined, {
-          ...event.metadata,
-          key: event.key,
-          error: getProfilerErrorCode(event.error)
-        });
+        event.type === "resource.fetch.succeeded"
+          ? finishProfilerSample("resource", event.name, `resource:${event.key}`, "success", event.timestamp, event.duration, {
+              ...event.metadata, key: event.key
+            })
+          : finishProfilerSample("resource", event.name, `resource:${event.key}`, "error", event.timestamp, undefined, {
+              ...event.metadata, key: event.key, error: getProfilerErrorCode((event as MeshEvent & { error: unknown }).error)
+            });
         return;
+
       case "mutation.succeeded":
-        finishProfilerSample("mutation", event.name, `mutation:${event.name}`, "success", event.timestamp, event.duration, event.metadata);
-        return;
       case "mutation.failed":
-        finishProfilerSample("mutation", event.name, `mutation:${event.name}`, "error", event.timestamp, undefined, {
-          ...event.metadata,
-          error: getProfilerErrorCode(event.error)
-        });
+        event.type === "mutation.succeeded"
+          ? finishProfilerSample("mutation", event.name, `mutation:${event.name}`, "success", event.timestamp, event.duration, event.metadata)
+          : finishProfilerSample("mutation", event.name, `mutation:${event.name}`, "error", event.timestamp, undefined, {
+              ...event.metadata, error: getProfilerErrorCode((event as MeshEvent & { error: unknown }).error)
+            });
         return;
+
       case "form.submit.succeeded":
-        finishProfilerSample("form", event.name, `form:submit:${event.name}`, "success", event.timestamp, event.duration, {
-          ...event.metadata,
-          mode: "submit"
-        });
-        return;
       case "form.submit.failed":
-        finishProfilerSample("form", event.name, `form:submit:${event.name}`, "error", event.timestamp, undefined, {
-          ...event.metadata,
-          mode: "submit",
-          error: getProfilerErrorCode(event.error)
-        });
-        return;
       case "form.autosave.succeeded":
-        finishProfilerSample("form", event.name, `form:autosave:${event.name}`, "success", event.timestamp, event.duration, {
-          ...event.metadata,
-          mode: "autosave"
-        });
+      case "form.autosave.failed": {
+        const mode = event.type.startsWith("form.autosave") ? "autosave" as const : "submit" as const;
+        event.type.endsWith(".succeeded")
+          ? finishProfilerSample("form", event.name, `form:${mode}:${event.name}`, "success", event.timestamp, event.duration, {
+              ...event.metadata, mode
+            })
+          : finishProfilerSample("form", event.name, `form:${mode}:${event.name}`, "error", event.timestamp, undefined, {
+              ...event.metadata, mode, error: getProfilerErrorCode((event as MeshEvent & { error: unknown }).error)
+            });
         return;
-      case "form.autosave.failed":
-        finishProfilerSample("form", event.name, `form:autosave:${event.name}`, "error", event.timestamp, undefined, {
-          ...event.metadata,
-          mode: "autosave",
-          error: getProfilerErrorCode(event.error)
-        });
-        return;
-      default:
-        return;
+      }
     }
   }
 
@@ -746,9 +761,16 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   }
 
   function notifyDevtools(): void {
-    for (const listener of devtoolsListeners) {
-      listener();
-    }
+    // Throttle devtools notifications to at most once per frame (roughly 60fps).
+    // getDevtoolsSnapshot is expensive (deep-clones state, iterates resources/forms/mutations),
+    // and there's no benefit to re-rendering the devtools panel faster than the display rate.
+    if (devtoolsNotifyTimer) return;
+    devtoolsNotifyTimer = setTimeout(() => {
+      devtoolsNotifyTimer = null;
+      for (const listener of devtoolsListeners) {
+        listener();
+      }
+    }, 16);
   }
 
   function doctor(doctorOptions: MeshDoctorOptions = {}): MeshDoctorReport {
@@ -1126,6 +1148,14 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       const result = batcher.batch(() => {
         const draft = cloneState(state);
         const returned = handler(draft, payload, { name: actionName, mesh });
+
+        // Skip the clone-and-commit cycle when the action didn't actually change
+        // state. The shallow equality check is O(n) on top-level keys — negligible
+        // compared to structuredClone of the entire state tree.
+        if (shallowEqual(state, draft)) {
+          return returned;
+        }
+
         commitState(draft, createStateEvent(undefined, { action: actionName }), false);
         return returned;
       });
@@ -1670,10 +1700,11 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     };
   }
 
+  // Stable reference cache for status objects — avoids creating new objects on every
+  // read when nothing changed. Each status setter stores a new object, so identity
+  // checks (===) reliably detect actual changes.
   function getTransactionStatus<TResult = unknown>(transactionName: string): TransactionStatus<TResult> {
-    return {
-      ...(transactionStatuses.get(transactionName) ?? DEFAULT_TRANSACTION_STATUS)
-    } as TransactionStatus<TResult>;
+    return transactionStatuses.get(transactionName) ?? DEFAULT_TRANSACTION_STATUS as unknown as TransactionStatus<TResult>;
   }
 
   function setTransactionStatus(transactionName: string, partial: Partial<TransactionStatus>): void {
@@ -1921,7 +1952,16 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     const definition = getResourceDefinition<TParams, TData>(resourceName);
     const key = getResourceCacheKey(resourceName, definition, params);
     const entry = ensureResourceEntry(resourceName, key, params, definition);
-    return createResourceStatus<TData, TParams>(entry, definition);
+    const cacheKey = `${resourceName}::${key}`;
+    const cached = lastResourceStatuses.get(cacheKey);
+
+    if (cached && cached.startedAt === entry.startedAt && cached.finishedAt === entry.finishedAt && cached.status === entry.status && cached.stale === entry.stale && cached.data === entry.data && cached.error === entry.error && cached.pending === entry.pending && cached.fetching === entry.fetching && cached.updatedAt === entry.updatedAt) {
+      return cached as ResourceStatus<TData, TParams>;
+    }
+
+    const status = createResourceStatus<TData, TParams>(entry, definition);
+    lastResourceStatuses.set(cacheKey, status);
+    return status;
   }
 
   function setResourceData<TData = unknown, TParams = unknown>(
@@ -2468,9 +2508,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   }
 
   function getMutationStatus<TResult = unknown>(mutationName: string): MutationStatus<TResult> {
-    return {
-      ...(mutationStatuses.get(mutationName) ?? DEFAULT_MUTATION_STATUS)
-    } as MutationStatus<TResult>;
+    return mutationStatuses.get(mutationName) ?? DEFAULT_MUTATION_STATUS as unknown as MutationStatus<TResult>;
   }
 
   function setMutationStatus(mutationName: string, partial: Partial<MutationStatus>): void {
@@ -3138,6 +3176,10 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     commitState(cloneState(snap.state), createStateEvent(undefined, { snapshotId }));
   }
 
+  function batch<T>(fn: () => T): T {
+    return batcher.batch(fn);
+  }
+
   function middleware(handler: MeshMiddleware<TState>): Unsubscribe {
     middlewares.add(handler);
     return () => middlewares.delete(handler);
@@ -3801,6 +3843,25 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   ): ResourceEntry {
     const existing = resourceEntries.get(key);
     if (existing) return existing;
+
+    // Evict oldest unused entries when over the cache limit.
+    const maxEntries = definition.maxCacheEntries ?? Infinity;
+    if (resourceEntries.size >= maxEntries) {
+      const evictable: Array<{ key: string; updatedAt: number }> = [];
+      for (const [existingKey, existingEntry] of resourceEntries) {
+        const listenerCount = resourceListeners.get(existingKey)?.size ?? 0;
+        if (listenerCount === 0 && existingEntry.status === "success") {
+          evictable.push({ key: existingKey, updatedAt: existingEntry.updatedAt ?? 0 });
+        }
+      }
+      evictable.sort((a, b) => a.updatedAt - b.updatedAt);
+      const toEvict = resourceEntries.size - maxEntries + 1;
+      for (let i = 0; i < toEvict && i < evictable.length; i++) {
+        const e = resourceEntries.get(evictable[i].key);
+        if (e?.gcTimer) clearTimeout(e.gcTimer);
+        resourceEntries.delete(evictable[i].key);
+      }
+    }
 
     const initialData = typeof definition.initialData === "function"
       ? (definition.initialData as (params: TParams) => TData)(params as TParams)

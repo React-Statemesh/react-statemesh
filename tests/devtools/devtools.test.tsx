@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StateMeshDevtools, createMesh } from "../../src";
 
@@ -118,8 +118,11 @@ describe("StateMesh DevTools", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Profiler" }));
-    expect(screen.getByText(/action\.counter\.increment/)).toBeTruthy();
-    expect(screen.getAllByText(/\d+ms/).length).toBeGreaterThan(0);
+
+    await waitFor(() => {
+      expect(screen.getByText(/action\.counter\.increment/)).toBeTruthy();
+      expect(screen.getAllByText(/\d+ms/).length).toBeGreaterThan(0);
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Doctor" }));
     expect(screen.getByText(/RESOURCE_WITHOUT_TAGS/)).toBeTruthy();
