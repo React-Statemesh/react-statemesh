@@ -53,13 +53,14 @@
   ],
   "scripts": {
     "build": "tsup",
+    "build:clean": "tsup && find dist -name '*.map' -delete",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:types": "tsd",
     "lint": "eslint src tests",
     "bench": "tsx benchmarks/basic.ts",
-    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build && pnpm test:types"
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build:clean && pnpm test:types"
   },
   "keywords": [
     "react",
