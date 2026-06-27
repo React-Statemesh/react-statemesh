@@ -1,6 +1,6 @@
 import type { Mesh, Unsubscribe } from "../core/types";
+import type { FlatRoute } from "./matchRoutes";
 import type {
-  FlatRoute,
   MeshRouter,
   NavigationTarget,
   NavigationContext,
@@ -21,6 +21,11 @@ import { RedirectError as RedirectErrorClass } from "./types";
 import { createBrowserHistory, createMemoryHistory, type HistoryAdapter, type HistoryLocation } from "./historyAdapter";
 import { flattenRoutes, matchRoutes, interpolatePath, normalizePath, parseSearch, buildPath } from "./matchRoutes";
 import { backoff } from "../utils/backoff";
+
+// Cast helper — Mesh<TState> is assignable to Mesh at runtime, the generic is only for type-safe getState/setState
+function asMesh<T>(mesh: Mesh<T>): Mesh {
+  return mesh as unknown as Mesh;
+}
 
 const ROUTER_EVENT_TYPES = {
   NAVIGATION: "router.navigation" as const,
@@ -105,7 +110,7 @@ export function createRouter<TState = unknown>(
       // Apply search validation/defaults
       const route = match.route;
       if (route.validateSearch) {
-        match.search = route.validateSearch(match.search);
+        match.search = route.validateSearch(match.search as Record<string, string>);
       }
       if (route.defaultSearch) {
         match.search = { ...route.defaultSearch, ...match.search };
@@ -176,8 +181,8 @@ export function createRouter<TState = unknown>(
         if (route.beforeLoad) {
           await route.beforeLoad({
             params: target.params,
-            search: target.search,
-            mesh
+            search: target.search as Record<string, string>,
+            mesh: asMesh(mesh)
           });
         }
       }
@@ -286,8 +291,8 @@ export function createRouter<TState = unknown>(
       if (match.route.loader) {
         match.loaderData = await match.route.loader({
           params: match.params,
-          search: match.search,
-          mesh,
+          search: match.search as Record<string, string>,
+          mesh: asMesh(mesh),
           signal: signal ?? new AbortController().signal
         });
       }
@@ -305,7 +310,7 @@ export function createRouter<TState = unknown>(
         await Promise.all(
           depEntries.map(async ([key, fn]) => {
             try {
-              const data = await fn(match.params, mesh);
+              const data = await fn(match.params, asMesh(mesh));
               (match as Record<string, unknown>)[`dep:${key}`] = data;
             } catch {
               // Dependencies are best-effort
@@ -339,7 +344,7 @@ export function createRouter<TState = unknown>(
         if (action === "fallback") break;
       }
 
-      await sleep(delayFn(attempt));
+      await sleep(delayFn(attempt, error));
 
       try {
         await runLoader(match);
@@ -469,13 +474,14 @@ export function createRouter<TState = unknown>(
 
       // Prefetch the route's component and loader
       const match = matchRoutes(flatRoutes, entry.path);
-      if (match?.route.loader) {
-        match.route.loader({
+      if (match && typeof match.route.loader === "function") {
+        const loader = match.route.loader;
+        Promise.resolve(loader({
           params: match.params,
           search: match.search,
-          mesh,
+          mesh: asMesh(mesh),
           signal: new AbortController().signal
-        }).catch(() => undefined);
+        })).catch(() => undefined);
       }
     }
   }
@@ -570,8 +576,8 @@ export function createRouter<TState = unknown>(
     if (match?.route.loader) {
       await match.route.loader({
         params: match.params,
-        search: match.search,
-        mesh,
+        search: match.search as Record<string, string>,
+        mesh: asMesh(mesh),
         signal: new AbortController().signal
       });
     }
@@ -607,7 +613,7 @@ export function createRouter<TState = unknown>(
       listener();
     }
     // Emit mesh event
-    (mesh as Mesh).emit?.({
+    asMesh(mesh).emit?.({
       type: "state.changed",
       path: "router",
       timestamp: Date.now(),

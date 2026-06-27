@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
 import type { Mesh, Unsubscribe } from "../core/types";
-import type { MeshRouter, RouteDefinition, RouteMatch, RouterContextValue } from "./types";
+import type { MeshRouter, RouteDefinition, RouteMatch, RouterContextValue } from "../router/types";
 
 const RouterContext = createContext<RouterContextValue | null>(null);
 

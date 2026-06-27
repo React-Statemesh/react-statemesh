@@ -102,7 +102,8 @@ export function createMemoryHistory(initialPath = "/", initialEntries?: string[]
   const listeners = new Set<(location: HistoryLocation, action: "push" | "replace" | "pop") => void>();
 
   function getLocation(): HistoryLocation {
-    return entries[index].location;
+    const entry = entries[index] ?? entries[0]!;
+    return entry.location;
   }
 
   function notify(action: "push" | "replace" | "pop") {

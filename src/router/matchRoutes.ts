@@ -86,7 +86,8 @@ export function matchPattern(compiled: CompiledPattern, pathname: string): Recor
 
   const params: Record<string, string> = {};
   for (let i = 0; i < compiled.paramNames.length; i++) {
-    params[compiled.paramNames[i]] = decodeURIComponent(match[i + 1] ?? "");
+    const name = compiled.paramNames[i];
+    if (name) params[name] = decodeURIComponent(match[i + 1] ?? "");
   }
   return params;
 }

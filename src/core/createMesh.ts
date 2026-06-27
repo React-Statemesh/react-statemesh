@@ -512,7 +512,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       case "form.autosave.failed": {
         const mode = event.type.startsWith("form.autosave") ? "autosave" as const : "submit" as const;
         event.type.endsWith(".succeeded")
-          ? finishProfilerSample("form", event.name, `form:${mode}:${event.name}`, "success", event.timestamp, event.duration, {
+          ? finishProfilerSample("form", event.name, `form:${mode}:${event.name}`, "success", event.timestamp, (event as { duration?: number }).duration, {
               ...event.metadata, mode
             })
           : finishProfilerSample("form", event.name, `form:${mode}:${event.name}`, "error", event.timestamp, undefined, {
@@ -1718,7 +1718,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   // read when nothing changed. Each status setter stores a new object, so identity
   // checks (===) reliably detect actual changes.
   function getTransactionStatus<TResult = unknown>(transactionName: string): TransactionStatus<TResult> {
-    return transactionStatuses.get(transactionName) ?? DEFAULT_TRANSACTION_STATUS as unknown as TransactionStatus<TResult>;
+    return (transactionStatuses.get(transactionName) ?? DEFAULT_TRANSACTION_STATUS) as TransactionStatus<TResult>;
   }
 
   function setTransactionStatus(transactionName: string, partial: Partial<TransactionStatus>): void {
@@ -2538,7 +2538,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   }
 
   function getMutationStatus<TResult = unknown>(mutationName: string): MutationStatus<TResult> {
-    return mutationStatuses.get(mutationName) ?? DEFAULT_MUTATION_STATUS as unknown as MutationStatus<TResult>;
+    return (mutationStatuses.get(mutationName) ?? DEFAULT_MUTATION_STATUS) as MutationStatus<TResult>;
   }
 
   function setMutationStatus(mutationName: string, partial: Partial<MutationStatus>): void {
@@ -3968,9 +3968,11 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       evictable.sort((a, b) => a.updatedAt - b.updatedAt);
       const toEvict = resourceEntries.size - maxEntries + 1;
       for (let i = 0; i < toEvict && i < evictable.length; i++) {
-        const e = resourceEntries.get(evictable[i].key);
+        const entry = evictable[i];
+        if (!entry) continue;
+        const e = resourceEntries.get(entry.key);
         if (e?.gcTimer) clearTimeout(e.gcTimer);
-        resourceEntries.delete(evictable[i].key);
+        resourceEntries.delete(entry.key);
       }
     }
 
