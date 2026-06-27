@@ -11,3 +11,4 @@ export * from "./devtools";
 export * from "./testing";
 export * from "./errors";
 export * from "./utils";
+export * from "./router";

@@ -1024,6 +1024,274 @@ try {
 }
 ```
 
+## Router
+
+StateMesh ships a built-in router where **routing IS state management**. Every route transition is a transaction. Every loader is a resource. Every guard is middleware. No other React router reuses the state management primitives this way.
+
+### Route Definitions
+
+```ts
+import { defineRoutes } from "react-statemesh/router";
+
+const routes = defineRoutes([
+  {
+    path: "/",
+    component: () => import("./pages/Home"),
+    meta: { title: "Home" }
+  },
+  {
+    path: "/products",
+    component: () => import("./pages/Products"),
+    loader: async ({ mesh, signal }) => {
+      return mesh.resource("products.list").fetch({ search: "" }, { signal });
+    },
+    children: [
+      {
+        path: ":id",
+        component: () => import("./pages/ProductDetail"),
+        loader: async ({ params, mesh }) => {
+          return mesh.resource("product.detail").fetch({ id: params.id });
+        }
+      }
+    ]
+  },
+  {
+    path: "/checkout",
+    component: () => import("./pages/Checkout"),
+    meta: { requiresAuth: true },
+    pendingComponent: () => import("./pages/CheckoutLoading"),
+    errorComponent: () => import("./pages/CheckoutError"),
+    rollback: true
+  },
+  {
+    path: "*",
+    component: () => import("./pages/NotFound")
+  }
+]);
+```
+
+### Router Registration
+
+```ts
+const router = mesh.router(routes, {
+  basename: "/app",
+  defaultPendingMs: 200,
+  defaultPendingMinMs: 300,
+  scrollRestoration: true,
+  preload: "intent"
+});
+```
+
+### Provider and Outlet
+
+```tsx
+import { RouterProvider, Outlet } from "react-statemesh";
+
+function App() {
+  return (
+    <StateMeshProvider mesh={mesh}>
+      <RouterProvider router={router} mesh={mesh} routes={routes}>
+        <Layout />
+      </RouterProvider>
+    </StateMeshProvider>
+  );
+}
+
+function Layout() {
+  return (
+    <div>
+      <nav>
+        <Link to="/">Home</Link>
+        <Link to="/products">Products</Link>
+      </nav>
+      <Outlet />
+    </div>
+  );
+}
+```
+
+### Navigation
+
+```tsx
+import { Link, useNavigate, useMatch, useParams, useSearch } from "react-statemesh";
+
+// Declarative navigation
+<Link to="/products/:id" params={{ id: "kbd" }}>Keyboard</Link>
+<Link to="/search" search={{ q: "mouse" }}>Search mice</Link>
+<Link to="/products" preload>Products (preload on hover)</Link>
+
+// Programmatic navigation
+const navigate = useNavigate();
+navigate("/checkout");
+navigate("/products/:id", { params: { id: "kbd" } });
+navigate("/login", { replace: true, search: { returnTo: "/checkout" } });
+
+// Reading route data
+const match = useMatch();
+const { id } = useParams();
+const [search, setSearch] = useSearch();
+```
+
+### Route Guards and Middleware
+
+```ts
+// Middleware — runs on every navigation, can redirect or block
+router.use(async (to, from, next) => {
+  analytics.page(to.fullPath);
+  return next();
+});
+
+// Guards — observational, can redirect
+router.beforeEach((to, from, context) => {
+  if (to.meta.requiresAuth && !context.mesh.getState().auth.token) {
+    throw redirect("/login", { search: { returnTo: to.fullPath } });
+  }
+});
+```
+
+### Navigation Rollback
+
+Routes with `rollback: true` revert the entire navigation if the loader fails. The URL goes back, the user stays on the previous page, and no error page is shown:
+
+```ts
+{
+  path: "/checkout",
+  rollback: true,
+  loader: async ({ mesh }) => {
+    return mesh.resource("checkout.summary").fetch();
+    // If this throws, the URL reverts to the previous route
+  }
+}
+```
+
+### Route Memory Pool (Keep-Alive)
+
+Routes with `keepAlive: true` stay mounted when navigating away. The router maintains a configurable pool with LRU eviction:
+
+```ts
+const router = mesh.router(routes, {
+  keepAlive: { maxRoutes: 5, evictionStrategy: "lru" }
+});
+
+// In the route definition
+{ path: "/orders/new", component: OrderForm, keepAlive: true }
+```
+
+When the user navigates back to `/orders/new`, the form is instantly visible with all values preserved. No loading spinner, no re-fetch, no form reset.
+
+### Predictive Prefetch
+
+The router learns navigation patterns and speculatively prefetches likely next routes:
+
+```ts
+const router = mesh.router(routes, {
+  predictivePrefetch: {
+    enabled: true,
+    topN: 2,
+    minProbability: 0.3
+  }
+});
+```
+
+After visiting `/products` → `/products/:id` three times, the fourth visit prefetches the detail route automatically. Navigation becomes instant.
+
+### Automatic Route Analytics
+
+Zero-config page view tracking, time on page, scroll depth, and bounce rate:
+
+```ts
+const router = mesh.router(routes, {
+  analytics: {
+    enabled: true,
+    trackPageViews: true,
+    trackTimeOnPage: true,
+    trackScrollDepth: true,
+    onEvent: (event) => analytics.track(event.name, event.properties)
+  }
+});
+```
+
+Events emitted: `route.page_view`, `route.time_on_page`, `route.scroll_depth`, `route.navigation`, `route.bounce`.
+
+### Route Dependencies
+
+Prefetch data in parallel with the main loader:
+
+```ts
+{
+  path: "/orders/:id",
+  loader: async ({ params, mesh }) => mesh.resource("order.detail").fetch({ id: params.id }),
+  dependencies: {
+    customer: (params, mesh) => mesh.resource("customer.detail").fetch({ id: params.customerId }),
+    products: (params, mesh) => mesh.resource("products.list").fetch()
+  }
+}
+```
+
+### Error Recovery with Retry
+
+Routes can auto-retry failed loaders with exponential backoff:
+
+```ts
+{
+  path: "/dashboard",
+  loader: async ({ mesh }) => mesh.resource("dashboard.data").fetch(),
+  errorRecovery: {
+    retry: 3,
+    retryDelay: backoff({ base: 1000, max: 10000 }),
+    fallbackComponent: () => import("./DashboardSkeleton")
+  }
+}
+```
+
+### Shared Element Transitions
+
+Animate elements between routes using FLIP (First, Last, Invert, Play):
+
+```tsx
+// Product list
+<Link to="/products/:id" params={{ id: product.id }}>
+  <SharedElement id={`product-image-${product.id}`}>
+    <img src={product.image} />
+  </SharedElement>
+</Link>
+
+// Product detail
+<SharedElement id={`product-image-${product.id}`}>
+  <img src={product.image} className="hero" />
+</SharedElement>
+```
+
+### SEO + Meta Management
+
+Declarative meta per route:
+
+```ts
+{
+  path: "/products/:id",
+  loader: async ({ params, mesh }) => mesh.resource("product.detail").fetch({ id: params.id }),
+  meta: ({ loaderData }) => ({
+    title: `${loaderData.name} | My Store`,
+    description: loaderData.description,
+    ogImage: loaderData.image
+  })
+}
+```
+
+The router automatically updates `<title>`, `<meta>`, and Open Graph tags on every navigation.
+
+### History Adapters
+
+```ts
+import { createBrowserHistory, createMemoryHistory } from "react-statemesh/router";
+
+// Browser history (default in browser environments)
+const browserHistory = createBrowserHistory("/app");
+
+// Memory history (for testing and SSR)
+const memoryHistory = createMemoryHistory("/", ["/products", "/products/kbd"]);
+```
+
 ## Testing
 
 ```ts
@@ -1124,3 +1392,4 @@ The JavaScript support desk example mirrors the same app shape with `.jsx`, so t
 - Persistence and tab sync are explicit whitelist features.
 - Logs do not dump full state by default and can mask sensitive metadata.
 - The core has no runtime dependency on Redux, Zustand, Immer, or validation libraries.
+- The router uses `window.history` in browser environments and a memory adapter for testing/SSR.

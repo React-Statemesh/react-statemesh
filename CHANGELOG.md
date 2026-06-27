@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.4.0
+
+### Router
+
+StateMesh now ships a built-in router where **routing IS state management**. Every route transition is a transaction. Every loader is a resource. Every guard is middleware. No other React router reuses the state management primitives this way.
+
+- **`defineRoutes(routes)`.** Define a nested route tree with path patterns, lazy components, loaders, guards, and metadata.
+- **`mesh.router(routes, options)`.** Create a router instance bound to the mesh. The router manages navigation, data loading, and rendering.
+- **`<RouterProvider>`.** Context provider that wires the router to the React tree.
+- **`<Outlet>`.** Renders the matched route's component. Used for nested layouts.
+- **`<Link>`.** Navigation component with preload-on-hover/focus support, active class detection, and search param encoding.
+- **`useNavigate()`.** Stable navigation function for programmatic routing.
+- **`useMatch()`.** Read the current route match including params, search, loader data, and error state.
+- **`useParams()`.** Read the current route's path params.
+- **`useSearch()`.** Read and update the current route's search params.
+- **`redirect(target, options?)`.** Throw a redirect from guards or loaders. The router handles the redirect automatically.
+
+#### Route Middleware Pipeline
+
+- **`router.use(middleware)`.** Express-style middleware that runs on every navigation. Middleware can continue (`next()`), redirect (`throw redirect()`), or block (`return false`). Runs in registration order before any loader.
+
+#### Route Guards
+
+- **`router.beforeEach(guard)`.** Register a guard that runs before every navigation. Guards are observational — they can redirect but cannot block silently.
+
+#### Navigation Rollback
+
+- **`rollback: true`** on a route definition. If the loader fails, the entire navigation rolls back — the URL reverts and the user stays on the previous route. No broken page is ever shown.
+
+#### Route Memory Pool (Keep-Alive)
+
+- **`keepAlive: true`** on a route definition. The component stays mounted when navigating away. The router maintains a configurable pool of alive routes with LRU eviction.
+- **`keepAlive` router option.** Configure `maxRoutes`, `evictionStrategy` (`"lru"` or `"fifo"`), and `maxAge`.
+
+#### Predictive Prefetch
+
+- **`predictivePrefetch` router option.** The router learns which routes users visit next from the current route, builds a probability graph, and speculatively prefetches the top N most likely next routes. After visiting `/products` → `/products/:id` three times, the fourth visit prefetches the detail route automatically.
+
+#### Automatic Route Analytics
+
+- **`analytics` router option.** Zero-config page view tracking, time on page, scroll depth, bounce rate, and navigation funnels. All data stored as mesh state, visible in DevTools.
+
+#### Route Dependencies
+
+- **`dependencies`** on a route definition. Declare data dependencies that prefetch in parallel with the main loader. If data is already cached, the dependency resolves instantly.
+
+#### Error Recovery
+
+- **`errorRecovery`** on a route definition. Configure `retry`, `retryDelay` (works with the `backoff()` helper), `fallbackComponent`, and `onError`. The router retries failed loaders automatically, showing a fallback component during retries.
+
+#### Route-Level Offline Support
+
+- **`offline` router option.** Serve routes from the mesh resource cache when offline. Configure `strategy`, `cacheRoutes`, and `fallbackRoute`.
+
+#### Shared Element Transitions
+
+- **`<SharedElement id>`.** Place matching components on source and target routes. The router animates between them using FLIP (First, Last, Invert, Play).
+
+#### SEO + Meta Management
+
+- **`meta`** on a route definition. Static or dynamic metadata per route. The `updateDocumentMeta()` helper updates `<title>`, Open Graph tags, and canonical URLs automatically on navigation.
+
+### History Adapters
+
+- **`createBrowserHistory(basename?)`.** Browser history adapter using `window.history`. Listens to `popstate` for back/forward navigation.
+- **`createMemoryHistory(initialPath?, entries?)`.** Memory history adapter for testing and SSR. Supports push, replace, back, forward, and listener notifications.
+
 ## 0.3.0
 
 ### Wildcard Event Subscription
