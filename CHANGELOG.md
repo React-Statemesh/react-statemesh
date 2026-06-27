@@ -1,6 +1,46 @@
 # Changelog
 
-## 0.2.0
+## 0.3.0
+
+### Wildcard Event Subscription
+
+- **`mesh.on(filter, handler)`.** Subscribe to events matching a pattern. The filter accepts `type` and `name` fields that match exactly or with a RegExp. Supports `*` wildcards for prefix matching (e.g. `"action.*"` matches all action events).
+
+### Transaction Improvements
+
+- **Exponential backoff helper.** New `backoff()` utility exported from `react-statemesh`. Creates a delay function with configurable `base`, `max`, `factor`, and `jitter` options. Use with `retry.delay` for exponential backoff strategies.
+- **`retry.totalTimeout`.** Wall-clock timeout across all retry attempts. If the total elapsed time exceeds this value, the transaction aborts even if retries remain.
+- **`retry.onRetry`.** Callback invoked before each retry delay. Receives the attempt number, the last error, and the transaction context. Useful for logging, analytics, or user feedback.
+
+### Resource Improvements
+
+- **`enabled` option.** Conditional fetching at the resource definition level. Accepts a boolean or `(params, state) => boolean`. When false, the resource returns cached data without fetching.
+- **`select` option.** Transform raw fetched data before caching. The transformed value is returned to consumers while the original data is cached internally.
+- **`onSuccess` callback.** Called after a successful fetch. Receives the data and params.
+- **`onError` callback.** Called after a failed fetch. Receives the error and params.
+- **`mesh.cancelResource(name, params?)`.** Cancel an in-flight fetch by name and params. Aborts the controller and resets the fetching state.
+- **`ResourceHandle.cancel(params?)`.** Cancel an in-flight fetch directly from the resource handle.
+- **`mesh.isFetching(filter?)`.** Returns the count of resources currently fetching. Accepts optional `names` and `tags` filters.
+
+### Form Improvements
+
+- **`validateDebounce` option.** Debounce delay in milliseconds for field-level validation when `validateOnChange` is true. Defaults to 0 (immediate).
+- **`isValid` derived flag.** `form.isValid` is true when there are no errors and no validation is in progress. Available on both `FormState` and `FormApi`.
+
+### DevTools
+
+- **Dark theme.** `StateMeshDevtools` accepts a `theme` prop (`"light"` or `"dark"`). A toggle button in the header switches themes at runtime. Panel backgrounds, borders, text, and tab styles adapt to the selected theme.
+
+### Testing Utilities
+
+- **`mesh.mockResource(name, options)`.** Set cached resource data directly for a test. Accepts `data`, `params`, and `status` options.
+- **`mesh.mockMutation(name, options)`.** Set mutation status directly for a test. Accepts `result`, `error`, and `status` options.
+- **`waitForTransactionStatus(mesh, name, status, options?)`.** Async helper that polls until a transaction reaches the expected status or times out.
+- **`waitForMutationStatus(mesh, name, status, options?)`.** Async helper that polls until a mutation reaches the expected status or times out.
+
+### React Hooks
+
+- **`useMeshBatch`.** Returns a stable `batch` callback that groups multiple state updates into a single notification flush. Available from `react-statemesh`.
 
 - **Performance: skip clone on no-op actions.** Actions that produce the same state as the current snapshot skip the clone-and-commit cycle entirely. `shallowEqual(state, draft)` guards every action run.
 - **Performance: path tokenization cache.** Repeated `path.split('.')` calls (from `getPath`, `setPath`, computed deps, subscriptions) are cached per path string via a shared `splitPath` module.

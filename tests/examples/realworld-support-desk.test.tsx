@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import LoginPageApp, { createLoginExample as createLogin } from "../../examples/login-page/src/App";
 import ProductionObservabilityApp from "../../examples/production-observability/src/App";
 import ProductionUpgradesApp, { createProductionUpgradesExample, type Filters as ProductFilters } from "../../examples/production-upgrades/src/App";
 import App from "../../examples/realworld-support-desk/src/App";
@@ -213,5 +214,81 @@ describe("realworld support desk example", () => {
     await waitFor(() => expect(screen.getByText("Acme login is broken")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Add attachment" }));
     expect(screen.getByRole("button", { name: "Create ticket" })).toBeTruthy();
+  });
+
+  it("renders the login page React example", async () => {
+    render(<LoginPageApp />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy());
+    expect(screen.getByRole("textbox", { name: "Email" })).toBeTruthy();
+    expect(screen.getByLabelText("Password")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Log in" })).toBeTruthy();
+  });
+
+  it("logs in through the login page and logs out", async () => {
+    render(<LoginPageApp />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy());
+
+    const emailInput = screen.getByRole("textbox", { name: "Email" });
+    const passwordInput = screen.getByLabelText("Password");
+    const loginButton = screen.getByRole("button", { name: "Log in" });
+
+    fireEvent.change(emailInput, { target: { value: "admin@example.test" } });
+    fireEvent.change(passwordInput, { target: { value: "secret" } });
+
+    await act(async () => {
+      fireEvent.click(loginButton);
+    });
+
+    await waitFor(() => expect(screen.getByText(/Welcome, Admin/)).toBeTruthy());
+    expect(screen.getByText(/admin@example\.test/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy());
+  });
+
+  it("shows validation errors on the login form", async () => {
+    // Reset auth state from any previous test so we start on the login form.
+    const loginExample = createLogin();
+    loginExample.mesh.getState().auth.token = null;
+    loginExample.mesh.getState().auth.user = null;
+    loginExample.mesh.getState().ui.view = "login";
+
+    render(<LoginPageApp />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy());
+
+    const emailInput = screen.getByRole("textbox", { name: "Email" });
+    const passwordInput = screen.getByLabelText("Password");
+    const loginButton = screen.getByRole("button", { name: "Log in" });
+
+    // Clear any values from previous tests
+    fireEvent.change(emailInput, { target: { value: "" } });
+    fireEvent.change(passwordInput, { target: { value: "" } });
+    await act(async () => { fireEvent.click(loginButton); });
+
+    expect(screen.getByText("Email is required")).toBeTruthy();
+    expect(screen.getByText("Password is required")).toBeTruthy();
+  });
+
+  it("renders the plain JavaScript login page example", async () => {
+    // @ts-expect-error The JavaScript example is intentionally authored as .jsx.
+    const { default: JavaScriptApp } = await import("../../examples-js/login-page/src/App.jsx");
+
+    render(<JavaScriptApp />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy());
+
+    const emailInput = screen.getByRole("textbox", { name: "Email" });
+    const passwordInput = screen.getByLabelText("Password");
+
+    fireEvent.change(emailInput, { target: { value: "admin@example.test" } });
+    fireEvent.change(passwordInput, { target: { value: "secret" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Log in" }));
+    });
+
+    await waitFor(() => expect(screen.getByText("Welcome, Admin")).toBeTruthy());
   });
 });

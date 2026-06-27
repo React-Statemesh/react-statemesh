@@ -198,6 +198,25 @@ mesh.batch((m) => {
 
 If the callback throws, no state changes from the batch take effect. `batch` also works with actions and other mesh methods that mutate state.
 
+In React components, use the `useMeshBatch` hook for a stable batch callback:
+
+```tsx
+import { useMeshBatch } from "react-statemesh";
+
+function CartUpdate() {
+  const batch = useMeshBatch();
+
+  return (
+    <button onClick={() => batch(() => {
+      mesh.setPath("cart.quantity", 3);
+      mesh.setPath("cart.coupon", "SAVE10");
+    })}>
+      Update
+    </button>
+  );
+}
+```
+
 ## Transactions
 
 Transactions own the full lifecycle: validation, snapshot, optimistic update, effect, commit, rollback, retry, timeout, cancellation, status, and logging.
@@ -233,6 +252,43 @@ export const checkoutTransaction = mesh.transaction("cart.checkout", {
   },
   retry: { attempts: 2, delay: 1000 },
   timeout: 10000
+});
+```
+
+Use the `backoff()` helper for exponential retry delays with jitter:
+
+```ts
+import { backoff } from "react-statemesh";
+
+mesh.transaction("checkout.submit", {
+  retry: {
+    attempts: 3,
+    delay: backoff({ base: 1000, max: 30000, jitter: true })
+  }
+});
+```
+
+`backoff()` accepts `base` (starting delay), `max` (cap), `factor` (multiplier per attempt, default 2), and `jitter` (randomization).
+
+Add `totalTimeout` to limit the wall-clock time across all retry attempts:
+
+```ts
+mesh.transaction("checkout.submit", {
+  retry: { attempts: 5, delay: backoff(), totalTimeout: 30000 }
+});
+```
+
+Add `onRetry` to observe retry attempts for logging or analytics:
+
+```ts
+mesh.transaction("checkout.submit", {
+  retry: {
+    attempts: 3,
+    delay: backoff(),
+    onRetry: (attempt, error, ctx) => {
+      console.warn(`Retry ${attempt}/3 for ${ctx.name}:`, error.message);
+    }
+  }
 });
 ```
 
@@ -310,6 +366,51 @@ const auditResource = mesh.resource("audit.log", {
     return api.get<AuditPage>("/audit/recent", { signal: ctx.signal });
   }
 });
+```
+
+Resources support conditional fetching with `enabled`:
+
+```ts
+const userResource = mesh.resource("user.profile", {
+  enabled: (params, state) => state.auth.token !== null,
+  key: () => "current",
+  async fetch(_, ctx) {
+    return api.get<User>("/me", { signal: ctx.signal });
+  }
+});
+```
+
+When `enabled` returns false, the resource returns cached data without fetching. Accepts a boolean or `(params, state) => boolean`.
+
+Add `onSuccess` and `onError` callbacks for per-resource side effects:
+
+```ts
+const productsResource = mesh.resource("products.list", {
+  onSuccess: (data, params) => {
+    console.log(`Loaded ${data.length} products`);
+  },
+  onError: (error, params) => {
+    mesh.action("ui.showToast")({ message: error.message, severity: "error" });
+  },
+  // ...
+});
+```
+
+Cancel an in-flight resource fetch:
+
+```ts
+// Via mesh
+mesh.cancelResource("products.list", filters);
+
+// Via handle
+productsResource.cancel(filters);
+```
+
+Check if any resources are currently fetching:
+
+```ts
+const count = mesh.isFetching();                        // all fetching resources
+const cartCount = mesh.isFetching({ names: ["cart"] }); // filtered by name
 ```
 
 ```tsx
@@ -717,6 +818,8 @@ Useful form API:
 - `form.resetToServer(serverProfile)` replaces values and uses that payload as the new dirty baseline.
 - `form.autosaveNow()` forces an autosave when autosave is configured.
 - `form.nextStep()`, `form.previousStep()`, and `form.goToStep("contact")` handle wizard forms.
+- `form.isValid` is `true` when there are no errors and no validation is in progress.
+- `validateDebounce: 300` on the form definition debounces field-level validation when `validateOnChange` is true.
 
 ```tsx
 <input type="checkbox" {...form.checkbox("alerts")} />
@@ -752,6 +855,27 @@ mesh.use(loggerPlugin({
 }));
 ```
 
+Subscribe to events matching a filter with `mesh.on`:
+
+```ts
+// All action events
+mesh.on({ type: "action.completed" }, (event) => {
+  console.log(`Action ${event.name} completed`);
+});
+
+// All resource events (wildcard prefix)
+mesh.on({ type: "resource.*" }, (event) => {
+  console.log(`Resource event: ${event.type}`);
+});
+
+// Specific mutation by name pattern
+mesh.on({ type: /mutation\./, name: /^orders\./ }, (event) => {
+  console.log(`Order mutation: ${event.type}`);
+});
+```
+
+Filters accept `type` and `name` fields that match exactly, with a RegExp, or with a `*` wildcard for prefix matching.
+
 Plugins have `name`, `setup`, cleanup, and event access. Duplicate plugin names are rejected.
 
 Middleware and event listeners are observational. Synchronous throws and rejected promises are isolated so analytics, logging, or devtools code cannot break state updates.
@@ -783,13 +907,14 @@ function App() {
         mask={["auth.token", "user.email"]}
         previewBytes={2000}
         defaultView="overview"
+        theme="light"
       />
     </StateMeshProvider>
   );
 }
 ```
 
-The DevTools UI docks to the bottom of the page, can minimize to a floating launcher, and can maximize into a larger bottom panel. It includes tabs for:
+The DevTools UI docks to the bottom of the page, can minimize to a floating launcher, and can maximize into a larger bottom panel. Set `theme="dark"` for a dark-themed panel, or use the built-in toggle button in the header to switch at runtime. It includes tabs for:
 
 - overview health counts
 - state snapshot
@@ -902,7 +1027,7 @@ try {
 ## Testing
 
 ```ts
-import { createTestMesh } from "react-statemesh/testing";
+import { createTestMesh, waitForTransactionStatus } from "react-statemesh/testing";
 
 const mesh = createTestMesh({
   state: {
@@ -910,11 +1035,27 @@ const mesh = createTestMesh({
   }
 });
 
+// Mock actions and transaction effects
+mesh.mockAction("cart.addItem", (state, product) => {
+  state.cart.items.push(product);
+});
+
 mesh.mockTransactionEffect("cart.checkout", async () => {
   throw new Error("Payment failed");
 });
 
+// Set resource data directly for tests
+mesh.mockResource("products.list", {
+  data: [{ id: "1", name: "Keyboard" }],
+  params: { search: "" }
+});
+
 mesh.assertTransactionStatus("cart.checkout", "error");
+mesh.assertStatePath("cart.items", []);
+
+// Async helpers for waiting on async operations
+await waitForTransactionStatus(mesh, "cart.checkout", "success", { timeout: 5000 });
+await waitForMutationStatus(mesh, "orders.create", "success", { timeout: 5000 });
 ```
 
 ## Package Scripts
@@ -947,6 +1088,7 @@ TypeScript React examples:
 - `examples/realworld-support-desk`
 - `examples/production-upgrades`
 - `examples/production-observability`
+- `examples/login-page`
 - `examples/nextjs-app`
 
 The `realworld-support-desk` example is the full production workflow reference. It combines persisted UI state, URL filters, computed state, the API client, resource cache, prefetch, SSR cache hydration, entity helpers, optimistic/offline mutations, invalidation/refetch, production forms, async validation, autosave, field arrays, multi-step form state, tab sync, logger hooks, and in-app devtools.
@@ -954,6 +1096,8 @@ The `realworld-support-desk` example is the full production workflow reference. 
 The `production-upgrades` example focuses on the newer daily-app helpers: resource `keepPreviousData`/`placeholderData`/`select`, relative API bases, URL dynamic param capture, action guards, checkbox/radio/select/file form helpers, and `maxCacheEntries` for bounded resource caches.
 
 The `production-observability` example combines Suspense resources, reset-aware error handling, Doctor diagnostics, the performance profiler, `createSelector` memoized selectors, and `mesh.batch` grouped state updates.
+
+The `login-page` example demonstrates `createApiClient` token injection, `createSelector` for guarded route rendering, `mesh.form` with field validation and server error mapping, `mesh.mutation` for API-backed login, and `mesh.batch` for atomic auth state transitions.
 
 Plain JavaScript React examples:
 
@@ -968,6 +1112,7 @@ Plain JavaScript React examples:
 - `examples-js/realworld-support-desk`
 - `examples-js/production-upgrades`
 - `examples-js/production-observability`
+- `examples-js/login-page`
 - `examples-js/nextjs-app`
 
 The JavaScript support desk example mirrors the same app shape with `.jsx`, so teams that are not using TypeScript can copy the runtime patterns directly.

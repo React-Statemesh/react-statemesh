@@ -510,6 +510,10 @@ export type TransactionRetryOptions = {
   attempts: number;
   /** Delay in milliseconds or a function returning the delay for each retry. */
   delay?: number | ((attempt: number, error: Error) => number);
+  /** Wall-clock timeout in milliseconds across all retry attempts. Aborts if total elapsed time exceeds this value. */
+  totalTimeout?: number;
+  /** Called before each retry delay. Useful for logging, analytics, or user feedback. */
+  onRetry?: (attempt: number, error: Error, context: TransactionContext<unknown>) => void;
 };
 
 /** Context passed to transaction lifecycle callbacks. */
@@ -768,6 +772,8 @@ export type FormState<TValues extends Record<string, unknown> = Record<string, u
   stepIndex: number;
   /** Registered form steps. */
   steps: readonly FormStep<TValues>[];
+  /** True when there are no errors and validation is not running. Derived from `errors` and `validating`. */
+  isValid: boolean;
 };
 
 /** Definition used by `mesh.form`. */
@@ -794,6 +800,8 @@ export type FormDefinition<TValues extends Record<string, unknown> = Record<stri
   autosave?: boolean | FormAutosaveOptions<TValues>;
   /** Optional steps for multi-step forms. */
   steps?: readonly FormStep<TValues>[];
+  /** Debounce delay in milliseconds for field-level validation when `validateOnChange` is true. Defaults to 0 (immediate). */
+  validateDebounce?: number;
 };
 
 /** Props returned by `form.field(name)` for spreading onto inputs. */
@@ -969,6 +977,14 @@ export type ResourceDefinition<TState, TParams = void, TData = unknown, TPagePar
   /** Maximum number of cache entries for this resource. Oldest entries with no active
    *  subscribers are evicted when this limit is reached. Defaults to `Infinity`. */
   maxCacheEntries?: number;
+  /** Enable or disable automatic fetching. Defaults to `true`. When false, the resource will not fetch until enabled. */
+  enabled?: boolean | ((params: TParams, state: TState) => boolean);
+  /** Transform the raw fetched data before caching. The transformed value is returned to consumers but the original is cached. */
+  select?: (data: TData, params: TParams) => TData;
+  /** Called after a successful fetch. */
+  onSuccess?: (data: TData, params: TParams) => void;
+  /** Called after a failed fetch. */
+  onError?: (error: Error, params: TParams) => void;
 };
 
 /** Runtime status for one resource cache entry. */
@@ -1242,6 +1258,8 @@ export type ResourceHandle<TParams = void, TData = unknown> = {
   invalidate: (invalidation?: ResourceInvalidation) => Promise<void>;
   /** Subscribe to one params entry. */
   subscribe: (listener: () => void, params?: TParams) => Unsubscribe;
+  /** Cancel an in-flight fetch for this resource. */
+  cancel: (params?: TParams) => void;
 };
 
 /** Mutation lifecycle status. */
@@ -1594,6 +1612,20 @@ export type Mesh<TState = unknown> = {
   use: (plugin: MeshPlugin<TState>) => Unsubscribe;
   /** Subscribe to all StateMesh events. */
   onEvent: (listener: (event: MeshEvent) => MaybePromise<void>) => Unsubscribe;
+  /** Subscribe to events matching a filter pattern. Supports wildcards for event type and operation name. */
+  on: (filter: MeshEventFilter, listener: (event: MeshEvent) => MaybePromise<void>) => Unsubscribe;
+  /** Check if any resource is currently fetching. Pass names/tags to filter. */
+  isFetching: (filter?: { names?: readonly string[]; tags?: readonly ResourceTag[] }) => number;
+  /** Cancel an in-flight resource fetch by name and params. */
+  cancelResource: (name: string, params?: unknown) => void;
   /** Emit an event to middleware/plugin listeners. */
   emit: (event: MeshEvent) => void;
+};
+
+/** Filter for subscribing to specific events via `mesh.on`. */
+export type MeshEventFilter = {
+  /** Match event type exactly or with a RegExp (e.g. `"action.*"` or `/^action\./`). */
+  type?: string | RegExp;
+  /** Match event name field exactly or with a RegExp. */
+  name?: string | RegExp;
 };

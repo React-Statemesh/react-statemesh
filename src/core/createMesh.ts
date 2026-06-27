@@ -168,6 +168,7 @@ type FormEntry<TValues extends Record<string, unknown>> = {
   validationRun: symbol | null;
   fieldValidationRuns: Map<string, symbol>;
   autosave: { (): void; cancel: () => void } | null;
+  fieldValidationDebounces: Map<string, { (): void; cancel: () => void }>;
 };
 
 type PluginEntry = {
@@ -381,6 +382,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     guard,
     use,
     onEvent,
+    on,
+    isFetching,
+    cancelResource,
     emit
   } satisfies Mesh<TState>;
 
@@ -1554,7 +1558,17 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
           }
 
           if (attempt < maxAttempts) {
+            const totalTimeout = definition.retry?.totalTimeout;
+            if (totalTimeout && Date.now() - startedAt >= totalTimeout) {
+              break;
+            }
+            if (definition.retry?.onRetry) {
+              definition.retry.onRetry(attempt, lastError, context as TransactionContext<unknown>);
+            }
             await delay(getRetryDelay(definition.retry?.delay, attempt, lastError));
+            if (totalTimeout && Date.now() - startedAt >= totalTimeout) {
+              break;
+            }
             continue;
           }
         }
@@ -1785,7 +1799,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       setData: (params, updater, setOptions) => setResourceData<TData, TParams>(resourceName, params, updater, setOptions),
       invalidate: (invalidation?: ResourceInvalidation) =>
         invalidateResources(normalizeHandleInvalidation(resourceName, invalidation)),
-      subscribe: (listener, params?: TParams) => subscribeResource(resourceName, listener, { params })
+      subscribe: (listener, params?: TParams) => subscribeResource(resourceName, listener, { params }),
+      cancel: (params?: TParams) => cancelResource(resourceName, params)
     };
   }
 
@@ -1844,6 +1859,15 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     const definition = getResourceDefinition<TParams, TData>(resourceName);
     const key = getResourceCacheKey(resourceName, definition, params);
     const entry = ensureResourceEntry(resourceName, key, params, definition);
+
+    if (definition.enabled !== undefined) {
+      const enabledValue = typeof definition.enabled === "function"
+        ? (definition.enabled as (params: TParams, state: TState) => boolean)(params as TParams, state)
+        : definition.enabled;
+      if (!enabledValue) {
+        return Promise.resolve(entry.data as TData);
+      }
+    }
 
     if (!fetchOptions.force && entry.status === "success" && !isResourceEntryStale(entry, definition) && !append) {
       return Promise.resolve(entry.data as TData);
@@ -1916,6 +1940,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
           timestamp: finishedAt,
           metadata: { mesh: name, tags: entry.tags, ...fetchOptions.metadata }
         });
+        if (definition.onSuccess) {
+          try { definition.onSuccess(result as TData, params as TParams); } catch { /* observational */ }
+        }
         return result as TData;
       })
       .catch((error) => {
@@ -1941,6 +1968,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
           timestamp: Date.now(),
           metadata: { mesh: name, ...fetchOptions.metadata }
         });
+        if (definition.onError) {
+          try { definition.onError(wrapped, params as TParams); } catch { /* observational */ }
+        }
         throw wrapped;
       });
 
@@ -3036,7 +3066,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       listeners: existing?.listeners ?? new Set(),
       validationRun: null,
       fieldValidationRuns: new Map(),
-      autosave: null
+      autosave: null,
+      fieldValidationDebounces: new Map()
     };
     entry.autosave = createFormAutosave(formName, entry);
     formEntries.set(formName, entry);
@@ -3067,6 +3098,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
 
     const api = {
       ...entry.state,
+      get isValid() {
+        return Object.keys(entry.state.errors).length === 0 && !entry.state.validating;
+      },
       field: <K extends keyof TValues & string>(fieldName: K) => ({
         name: fieldName,
         value: entry.state.values[fieldName],
@@ -3232,6 +3266,70 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     return () => eventListeners.delete(listener);
   }
 
+  function on(filter: import("./types").MeshEventFilter, listener: (event: MeshEvent) => MaybePromise<void>): Unsubscribe {
+    const wrapped = (event: MeshEvent): void | Promise<void> => {
+      if (filter.type) {
+        const typeStr = event.type;
+        if (typeof filter.type === "string") {
+          if (filter.type.endsWith("*")) {
+            if (!typeStr.startsWith(filter.type.slice(0, -1))) return;
+          } else if (typeStr !== filter.type) {
+            return;
+          }
+        } else if (!filter.type.test(typeStr)) {
+          return;
+        }
+      }
+      if (filter.name) {
+        const nameStr = (event as { name?: string }).name ?? "";
+        if (typeof filter.name === "string") {
+          if (filter.name.endsWith("*")) {
+            if (!nameStr.startsWith(filter.name.slice(0, -1))) return;
+          } else if (nameStr !== filter.name) {
+            return;
+          }
+        } else if (!filter.name.test(nameStr)) {
+          return;
+        }
+      }
+      return listener(event);
+    };
+    eventListeners.add(wrapped);
+    return () => eventListeners.delete(wrapped);
+  }
+
+  function isFetching(filter?: { names?: readonly string[]; tags?: readonly ResourceTag[] }): number {
+    let count = 0;
+    for (const entry of resourceEntries.values()) {
+      if (!entry.fetching) continue;
+      if (filter?.names && !filter.names.includes(entry.name)) continue;
+      if (filter?.tags) {
+        const entryTags = new Set(entry.tags);
+        const hasMatch = filter.tags.some((tag) => {
+          const normalized = typeof tag === "string" ? tag : (tag.id === undefined ? tag.type : `${tag.type}:${tag.id}`);
+          return entryTags.has(normalized);
+        });
+        if (!hasMatch) continue;
+      }
+      count += 1;
+    }
+    return count;
+  }
+
+  function cancelResource(name: string, params?: unknown): void {
+    const definition = resourceDefinitions.get(name);
+    if (!definition) return;
+    const key = getResourceCacheKey(name, definition, params);
+    const entry = resourceEntries.get(key);
+    if (entry?.controller) {
+      entry.controller.abort();
+      entry.fetching = false;
+      entry.pending = false;
+      entry.inFlight = null;
+      notifyResourceEntry(entry);
+    }
+  }
+
   function createStateEvent(path?: MeshPath, metadata?: Record<string, unknown>): MeshEvent {
     return {
       type: "state.changed",
@@ -3272,7 +3370,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       autosavedAt: null,
       currentStep: steps[0]?.name ?? null,
       stepIndex: steps.length > 0 ? 0 : -1,
-      steps
+      steps,
+      isValid: true
     };
   }
 
@@ -3313,7 +3412,19 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     };
     notifyForm(formName, fieldName);
     if (entry.definition.validateOnChange) {
-      validateFormField(entry, formName, fieldName).catch(() => undefined);
+      const debounceMs = entry.definition.validateDebounce ?? 0;
+      if (debounceMs > 0) {
+        let debouncedFn = entry.fieldValidationDebounces.get(fieldName as string);
+        if (!debouncedFn) {
+          debouncedFn = debounce(() => {
+            validateFormField(entry, formName, fieldName).catch(() => undefined);
+          }, debounceMs);
+          entry.fieldValidationDebounces.set(fieldName as string, debouncedFn);
+        }
+        debouncedFn();
+      } else {
+        validateFormField(entry, formName, fieldName).catch(() => undefined);
+      }
     }
     scheduleFormAutosave(entry);
   }

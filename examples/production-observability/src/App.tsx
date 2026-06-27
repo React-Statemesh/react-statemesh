@@ -19,7 +19,7 @@ type User = {
 
 // Memoized selector — only recomputes when `refreshes` changes, skipping
 // unnecessary re-renders even when other parts of state update frequently.
-const selectRefreshesParity = createSelector(
+const selectRefreshesParity = createSelector<{ refreshes: number }, [number], string>(
   [(state) => state.refreshes],
   (refreshes) => (refreshes % 2 === 0 ? "even" : "odd")
 );

@@ -12,6 +12,7 @@ export * from "./useMeshForm";
 export * from "./useMeshResource";
 export * from "./useSuspenseMeshResource";
 export * from "./useMeshMutation";
+export * from "./useMeshBatch";
 export {
   MeshErrorBoundary,
   MeshErrorResetBoundary,

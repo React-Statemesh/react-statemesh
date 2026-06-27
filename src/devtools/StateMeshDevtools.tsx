@@ -11,6 +11,123 @@ import type {
 } from "../core/types";
 import { formatEvent } from "./eventFormatter";
 
+export type DevtoolsTheme = "light" | "dark";
+
+type ThemePalette = {
+  bg: string;
+  bgMuted: string;
+  bgAlt: string;
+  surface: string;
+  surfaceHover: string;
+  border: string;
+  borderLight: string;
+  borderFaint: string;
+  text: string;
+  textMuted: string;
+  textSecondary: string;
+  textInverted: string;
+  successBg: string;
+  successText: string;
+  successBorder: string;
+  warningBg: string;
+  warningText: string;
+  warningBorder: string;
+  dangerBg: string;
+  dangerText: string;
+  dangerBorder: string;
+  infoBg: string;
+  infoText: string;
+  infoBorder: string;
+  tabActive: string;
+  tabHover: string;
+  buttonBg: string;
+  buttonHover: string;
+  badgeBg: string;
+  codeBg: string;
+  shadow: string;
+  launcherBg: string;
+  launcherHover: string;
+  dot: string;
+};
+
+const lightPalette: ThemePalette = {
+  bg: "#ffffff",
+  bgMuted: "#fafafa",
+  bgAlt: "#f4f4f5",
+  surface: "#ffffff",
+  surfaceHover: "#f4f4f5",
+  border: "#d4d4d8",
+  borderLight: "#e4e4e7",
+  borderFaint: "#f4f4f5",
+  text: "#18181b",
+  textMuted: "#71717a",
+  textSecondary: "#52525b",
+  textInverted: "#ffffff",
+  successBg: "#f0fdf4",
+  successText: "#166534",
+  successBorder: "#bbf7d0",
+  warningBg: "#fffbeb",
+  warningText: "#92400e",
+  warningBorder: "#fde68a",
+  dangerBg: "#fef2f2",
+  dangerText: "#991b1b",
+  dangerBorder: "#fecaca",
+  infoBg: "#eff6ff",
+  infoText: "#1e40af",
+  infoBorder: "#bfdbfe",
+  tabActive: "#18181b",
+  tabHover: "#f4f4f5",
+  buttonBg: "#ffffff",
+  buttonHover: "#f4f4f5",
+  badgeBg: "#fafafa",
+  codeBg: "#f4f4f5",
+  shadow: "0 -18px 50px rgba(15, 23, 42, 0.18)",
+  launcherBg: "#18181b",
+  launcherHover: "#27272a",
+  dot: "#16a34a"
+};
+
+const darkPalette: ThemePalette = {
+  bg: "#18181b",
+  bgMuted: "#1e1e22",
+  bgAlt: "#27272a",
+  surface: "#1e1e22",
+  surfaceHover: "#27272a",
+  border: "#3f3f46",
+  borderLight: "#2e2e33",
+  borderFaint: "#27272a",
+  text: "#e4e4e7",
+  textMuted: "#a1a1aa",
+  textSecondary: "#d4d4d8",
+  textInverted: "#18181b",
+  successBg: "#052e16",
+  successText: "#86efac",
+  successBorder: "#166534",
+  warningBg: "#451a03",
+  warningText: "#fcd34d",
+  warningBorder: "#92400e",
+  dangerBg: "#450a0a",
+  dangerText: "#fca5a5",
+  dangerBorder: "#991b1b",
+  infoBg: "#172554",
+  infoText: "#93c5fd",
+  infoBorder: "#1e40af",
+  tabActive: "#e4e4e7",
+  tabHover: "#27272a",
+  buttonBg: "#27272a",
+  buttonHover: "#3f3f46",
+  badgeBg: "#27272a",
+  codeBg: "#27272a",
+  shadow: "0 -18px 50px rgba(0, 0, 0, 0.5)",
+  launcherBg: "#e4e4e7",
+  launcherHover: "#d4d4d8",
+  dot: "#22c55e"
+};
+
+function getPalette(theme: DevtoolsTheme): ThemePalette {
+  return theme === "dark" ? darkPalette : lightPalette;
+}
+
 /** Props for the in-app StateMesh DevTools dock. */
 export type StateMeshDevtoolsProps<TState = unknown> = {
   /** Mesh instance to inspect. */
@@ -47,6 +164,8 @@ export type StateMeshDevtoolsProps<TState = unknown> = {
   includeState?: boolean;
   /** Log a one-time console message when DevTools becomes active. Defaults to true. */
   logActiveMessage?: boolean;
+  /** Theme for the DevTools panel. Defaults to "light". */
+  theme?: DevtoolsTheme;
 };
 
 export type DevtoolsView =
@@ -103,8 +222,11 @@ export function StateMeshDevtools<TState = unknown>({
   mask,
   previewBytes = 2_000,
   includeState = true,
-  logActiveMessage = true
+  logActiveMessage = true,
+  theme: themeProp = "light"
 }: StateMeshDevtoolsProps<TState>) {
+  const [theme, setTheme] = useState<DevtoolsTheme>(themeProp);
+  const p = getPalette(theme);
   const [open, setOpen] = useState(defaultOpen);
   const [maximized, setMaximized] = useState(false);
   const [view, setView] = useState<DevtoolsView>(defaultView);
@@ -208,11 +330,11 @@ export function StateMeshDevtools<TState = unknown>({
 
   if (!open) {
     return (
-      <button type="button" style={launcherStyle} onClick={() => setOpen(true)} aria-label="Open StateMesh DevTools">
-        <span style={activeDotStyle} aria-hidden="true" />
+      <button type="button" style={{ ...launcherStyle, background: p.launcherBg, color: p.textInverted, border: `1px solid ${p.text}` }} onClick={() => setOpen(true)} aria-label="Open StateMesh DevTools">
+        <span style={{ ...activeDotStyle, background: p.dot, boxShadow: `0 0 0 3px ${p.dot}22` }} aria-hidden="true" />
         <span style={launcherTextStyle}>
           <strong>React StateMesh</strong>
-          <span style={launcherMetaStyle}>
+          <span style={{ ...launcherMetaStyle, color: p.textMuted }}>
             DevTools active. {snapshot.summary.doctorErrors > 0 ? `${snapshot.summary.doctorErrors} errors` : `${events.length} events`}
           </span>
         </span>
@@ -223,8 +345,8 @@ export function StateMeshDevtools<TState = unknown>({
   const height = maximized ? maximizedHeight : dockHeight;
 
   return (
-    <aside style={{ ...dockStyle, height: typeof height === "number" ? `${height}px` : height }} aria-label="StateMesh DevTools">
-      <header style={headerStyle}>
+    <aside style={{ ...dockStyle, height: typeof height === "number" ? `${height}px` : height, background: p.bg, color: p.text, borderTop: `1px solid ${p.border}`, boxShadow: p.shadow }} aria-label="StateMesh DevTools">
+      <header style={{ ...headerStyle, background: p.bg, borderBottom: `1px solid ${p.border}` }}>
         <div style={headerTopStyle}>
           <div style={brandStyle}>
             <span style={activeDotStyle} aria-hidden="true" />
@@ -239,23 +361,26 @@ export function StateMeshDevtools<TState = unknown>({
             <HeaderChip label="Issues" value={snapshot.summary.doctorErrors + snapshot.summary.doctorWarnings} tone={snapshot.summary.doctorErrors > 0 ? "danger" : snapshot.summary.doctorWarnings > 0 ? "warning" : "ok"} />
           </div>
           <div style={actionsStyle}>
-            <button type="button" style={buttonStyle} onClick={() => exportDebugReport(debugReport, onExportDebugReport)}>
+            <button type="button" style={{ ...buttonStyle, background: p.buttonBg, color: p.text, borderColor: p.border }} onClick={() => setTheme((t) => t === "light" ? "dark" : "light")}>
+              {theme === "light" ? "Dark" : "Light"}
+            </button>
+            <button type="button" style={{ ...buttonStyle, background: p.buttonBg, color: p.text, borderColor: p.border }} onClick={() => exportDebugReport(debugReport, onExportDebugReport)}>
               Export
             </button>
-            <button type="button" style={buttonStyle} onClick={() => setMaximized((current) => !current)}>
+            <button type="button" style={{ ...buttonStyle, background: p.buttonBg, color: p.text, borderColor: p.border }} onClick={() => setMaximized((current) => !current)}>
               {maximized ? "Dock" : "Max"}
             </button>
-            <button type="button" style={buttonStyle} onClick={() => setOpen(false)}>
+            <button type="button" style={{ ...buttonStyle, background: p.buttonBg, color: p.text, borderColor: p.border }} onClick={() => setOpen(false)}>
               Min
             </button>
           </div>
         </div>
-        <nav style={tabsStyle} aria-label="StateMesh DevTools views">
+        <nav style={{ ...tabsStyle, borderBottom: `1px solid ${p.border}` }} aria-label="StateMesh DevTools views">
           {tabs.map((tab) => (
             <button
               key={tab.value}
               type="button"
-              style={view === tab.value ? activeTabStyle : tabStyle}
+              style={view === tab.value ? { ...activeTabStyle, color: p.tabActive, background: "transparent" } : { ...tabStyle, color: p.textMuted }}
               onClick={() => setView(tab.value)}
             >
               {tab.label}
@@ -263,7 +388,7 @@ export function StateMeshDevtools<TState = unknown>({
           ))}
         </nav>
       </header>
-      <section style={bodyStyle}>
+      <section style={{ ...bodyStyle, background: p.bg }}>
         {view === "overview" ? <OverviewPanel snapshot={snapshot} events={events} /> : null}
         {view === "state" ? <StatePanel snapshot={snapshot} /> : null}
         {view === "actions" ? <TimelinePanel rows={actionRows} title="Actions & Transactions" /> : null}
