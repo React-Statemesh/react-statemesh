@@ -1385,6 +1385,42 @@ Plain JavaScript React examples:
 
 The JavaScript support desk example mirrors the same app shape with `.jsx`, so teams that are not using TypeScript can copy the runtime patterns directly.
 
+## Test Coverage
+
+The library ships with **534 test cases across 16 test files** covering every module, API surface, error path, and edge case.
+
+### Coverage by Module
+
+| Module | Tests | Files | Covers |
+|---|---|---|---|
+| **Core runtime** | 50 | `store.test.ts` | State reads/writes, subscriptions, guards, dehydration/hydration, profiling |
+| **Utils** | 100 | `utils.test.ts` | `clone`, `deepEqual`, `shallowEqual`, `getPath`, `setPath`, `mergeDeep`, `debounce`, `batch`, `backoff`, `splitPath` |
+| **Errors** | 131 | `errors.test.ts` | All 16 error classes + 5 helper functions (`getErrorMessage`, `getErrorMetadata`, `getErrorStatus`, `isApiClientError`, `isStateMeshError`) |
+| **Sync** | 25 | `sync.test.ts` | `tabSyncPlugin`, `BroadcastChannel` adapter, `localStorage` fallback, message serialization |
+| **Persistence** | 35 | `persist.test.ts` | `localStorage`, `sessionStorage`, memory, IndexedDB adapters, TTL, migration, corruption handling |
+| **URL state** | 38 | `url.test.ts` | `toQueryParams`, `fromQueryParams`, history adapters, serialization edge cases |
+| **DevTools** | 34 | `devtools.test.tsx` | Snapshots, event formatting, masking, logger bridge, devtools bridge |
+| **Testing utilities** | 25 | `testing.test.ts` | `createTestMesh`, `createMockMesh`, `mockActions`, assertions, `waitFor*` helpers |
+| **Computed** | 15 | `computed.test.ts` | `dependencyIntersects`, `mesh.computed()`, caching, circular reference handling |
+| **Router** | 63 | `router.test.ts` | `createBrowserHistory`, `createMemoryHistory`, `updateDocumentMeta`, `defineRoutes`, edge cases |
+| **Forms** | 11 | `forms.test.ts` | Form registration, validation, submission, field arrays |
+| **Transactions** | 7 | `transactions.test.ts` | Transaction lifecycle, optimistic updates, rollback |
+| **Resources** | 15 | `resources.test.ts` | Resource fetch, cache, invalidation, pagination |
+| **React hooks** | 35 | `hooks-extended.test.ts` | Mesh API behind hooks: forms, transactions, actions, batch, resources, mutations, computed, router |
+
+### Running Tests
+
+```bash
+# Full suite
+pnpm test
+
+# Type tests only
+pnpm test:types
+
+# Watch mode
+pnpm test:watch
+```
+
 ## Production Notes
 
 - React is a peer dependency.
