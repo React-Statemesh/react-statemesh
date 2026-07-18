@@ -88,7 +88,11 @@ import type {
   TransactionStatus,
   Unsubscribe,
   UrlSerializer,
-  UrlStateOptions
+  UrlStateOptions,
+  PipelineContext,
+  PipelineOptions,
+  PipelineStage,
+  TimeTravelEntry
 } from "./types";
 
 type Subscription<TState, TSelected> = {
@@ -296,6 +300,28 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   const devtoolsPendingComponentUsages = new Map<string, Map<string, MeshDevtoolsComponentUsage>>();
   let profilerSampleCounter = 0;
 
+  // --- Undo/Redo ---
+  const undoConfig = options.undo;
+  const undoEnabled = !!undoConfig;
+  const undoMaxHistory = undoConfig?.maxHistory ?? 50;
+  const undoPathFilter = undoConfig?.paths ? [...undoConfig.paths] : null;
+  const undoStack: Array<{ state: TState; timestamp: number }> = [];
+  const redoStack: Array<{ state: TState; timestamp: number }> = [];
+  let undoInProgress = false;
+  let undoBatchDepth = 0;
+  let undoBatchCaptured = false;
+
+  // --- Time Travel ---
+  const timeTravelConfig = options.timeTravel;
+  const timeTravelSupported = !!timeTravelConfig;
+  const timeTravelMaxEntries = timeTravelConfig?.maxEntries ?? 1000;
+  let timeTravelRecording = false;
+  const timeTravelLog: TimeTravelEntry<TState>[] = [];
+  let timeTravelCounter = 0;
+
+  // --- Middleware Pipelines ---
+  const pipelines = new Map<string, { name: string; stages: PipelineStage<TState>[]; options: PipelineOptions }>();
+
   const batcher = createBatcher(() => {
     const events = pendingEvents.splice(0);
     const event = events.length > 0 ? events[events.length - 1] : undefined;
@@ -385,7 +411,26 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     on,
     isFetching,
     cancelResource,
-    emit
+    emit,
+    // Undo/Redo
+    undo,
+    redo,
+    get canUndo() { return undoStack.length > 0; },
+    get canRedo() { return redoStack.length > 0; },
+    get undoStackSize() { return undoStack.length; },
+    get redoStackSize() { return redoStack.length; },
+    clearUndoHistory,
+    // Time Travel
+    enableTimeTravel,
+    disableTimeTravel,
+    get isTimeTravelEnabled() { return timeTravelRecording; },
+    getTimeTravelLog,
+    replayTo,
+    replayToTimestamp,
+    clearTimeTravelLog,
+    // Pipelines
+    pipeline: registerPipeline,
+    removePipeline
   } satisfies Mesh<TState>;
 
   if (isBrowser()) {
@@ -415,11 +460,29 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     profileEvent(event);
     notifyDevtools();
 
+    // Run "before" pipelines
+    if (pipelines.size > 0) {
+      for (const [, pipelineEntry] of pipelines) {
+        if (pipelineEntry.options.phase !== "before" && pipelineEntry.options.phase !== undefined) continue;
+        if (!matchesPipelineFilter(event, pipelineEntry.options.filter)) continue;
+        catchAsyncError(executePipeline(pipelineEntry, event));
+      }
+    }
+
     for (const middleware of middlewares) {
       try {
         catchAsyncError(middleware(event, mesh));
       } catch {
         // Middleware must not make state updates fail.
+      }
+    }
+
+    // Run "after" pipelines
+    if (pipelines.size > 0) {
+      for (const [, pipelineEntry] of pipelines) {
+        if (pipelineEntry.options.phase !== "after") continue;
+        if (!matchesPipelineFilter(event, pipelineEntry.options.filter)) continue;
+        catchAsyncError(executePipeline(pipelineEntry, event));
       }
     }
 
@@ -906,7 +969,50 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   }
 
   function commitState(nextState: TState, event: MeshEvent, silent = false): void {
+    // --- Undo/Redo bookkeeping ---
+    const isUndoRedoReplay = undoInProgress
+      || event.metadata?.phase === "undo"
+      || event.metadata?.phase === "redo"
+      || event.metadata?.phase === "replay";
+
+    if (undoEnabled && !isUndoRedoReplay) {
+      const insideBatch = undoBatchDepth > 0;
+      if (!insideBatch || !undoBatchCaptured) {
+        const stateToSave = undoPathFilter
+          ? cloneState(pickPaths(state, undoPathFilter) as TState)
+          : cloneState(state);
+        undoStack.push({ state: stateToSave, timestamp: Date.now() });
+        if (undoStack.length > undoMaxHistory) {
+          undoStack.shift();
+        }
+        redoStack.length = 0;
+        if (insideBatch) undoBatchCaptured = true;
+      }
+    }
+
+    // --- Time Travel bookkeeping (stateBefore) ---
+    let ttStateBefore: TState | null = null;
+    if (timeTravelSupported && timeTravelRecording && !undoInProgress) {
+      ttStateBefore = cloneState(state);
+    }
+
     state = nextState;
+
+    // --- Time Travel bookkeeping (stateAfter) ---
+    if (timeTravelSupported && timeTravelRecording && ttStateBefore && !undoInProgress) {
+      const entry: TimeTravelEntry<TState> = {
+        index: timeTravelCounter++,
+        event,
+        stateBefore: ttStateBefore,
+        stateAfter: cloneState(state),
+        timestamp: Date.now()
+      };
+      timeTravelLog.push(entry);
+      if (timeTravelLog.length > timeTravelMaxEntries) {
+        timeTravelLog.shift();
+      }
+    }
+
     if (!silent) queueEvent(event);
     batcher.schedule();
   }
@@ -958,6 +1064,17 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
 
   function reset(): void {
     assertActive();
+    // Push current state to undo stack before resetting
+    if (undoEnabled && !undoInProgress) {
+      const stateToSave = undoPathFilter
+        ? cloneState(pickPaths(state, undoPathFilter) as TState)
+        : cloneState(state);
+      undoStack.push({ state: stateToSave, timestamp: Date.now() });
+      if (undoStack.length > undoMaxHistory) {
+        undoStack.shift();
+      }
+      redoStack.length = 0;
+    }
     state = cloneState(initialState);
     queueEvent({ type: "state.reset", timestamp: Date.now() });
     batcher.schedule();
@@ -1024,6 +1141,10 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       entry.cleanup?.();
     }
     pluginCleanups.clear();
+    undoStack.length = 0;
+    redoStack.length = 0;
+    timeTravelLog.length = 0;
+    pipelines.clear();
   }
 
   function subscribe<TSelected>(
@@ -3211,6 +3332,17 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   }
 
   function batch<T>(fn: () => T): T {
+    if (undoEnabled) {
+      undoBatchDepth += 1;
+      try {
+        return batcher.batch(fn);
+      } finally {
+        undoBatchDepth -= 1;
+        if (undoBatchDepth === 0) {
+          undoBatchCaptured = false;
+        }
+      }
+    }
     return batcher.batch(fn);
   }
 
@@ -3328,6 +3460,255 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       entry.inFlight = null;
       notifyResourceEntry(entry);
     }
+  }
+
+  // --- Undo/Redo ---
+
+  function undo(): void {
+    assertActive();
+    if (!undoEnabled) {
+      throw new StateMeshError("Undo is not enabled. Pass `undo` options to createMesh.", {
+        code: "STATEMESH_UNDO_NOT_ENABLED",
+        metadata: { mesh: name }
+      });
+    }
+    if (undoStack.length === 0) return;
+
+    undoInProgress = true;
+    try {
+      const entry = undoStack.pop()!;
+      const currentToSave = undoPathFilter
+        ? cloneState(pickPaths(state, undoPathFilter) as TState)
+        : cloneState(state);
+      redoStack.push({ state: currentToSave, timestamp: Date.now() });
+
+      if (undoPathFilter) {
+        batcher.batch(() => {
+          let merged = state;
+          for (const path of undoPathFilter!) {
+            const value = getPath(entry.state, path);
+            merged = setValueAtPath(merged, path, value);
+          }
+          commitState(merged, {
+            type: "state.changed",
+            timestamp: Date.now(),
+            metadata: { phase: "undo" }
+          });
+        });
+      } else {
+        commitState(cloneState(entry.state), {
+          type: "state.changed",
+          timestamp: Date.now(),
+          metadata: { phase: "undo" }
+        });
+      }
+    } finally {
+      undoInProgress = false;
+    }
+  }
+
+  function redo(): void {
+    assertActive();
+    if (!undoEnabled) {
+      throw new StateMeshError("Redo is not enabled. Pass `undo` options to createMesh.", {
+        code: "STATEMESH_REDO_NOT_ENABLED",
+        metadata: { mesh: name }
+      });
+    }
+    if (redoStack.length === 0) return;
+
+    undoInProgress = true;
+    try {
+      const entry = redoStack.pop()!;
+      const currentToSave = undoPathFilter
+        ? cloneState(pickPaths(state, undoPathFilter) as TState)
+        : cloneState(state);
+      undoStack.push({ state: currentToSave, timestamp: Date.now() });
+
+      if (undoPathFilter) {
+        batcher.batch(() => {
+          let merged = state;
+          for (const path of undoPathFilter!) {
+            const value = getPath(entry.state, path);
+            merged = setValueAtPath(merged, path, value);
+          }
+          commitState(merged, {
+            type: "state.changed",
+            timestamp: Date.now(),
+            metadata: { phase: "redo" }
+          });
+        });
+      } else {
+        commitState(cloneState(entry.state), {
+          type: "state.changed",
+          timestamp: Date.now(),
+          metadata: { phase: "redo" }
+        });
+      }
+    } finally {
+      undoInProgress = false;
+    }
+  }
+
+  function clearUndoHistory(): void {
+    undoStack.length = 0;
+    redoStack.length = 0;
+  }
+
+  // --- Time Travel ---
+
+  function enableTimeTravel(): void {
+    assertActive();
+    if (!timeTravelSupported) {
+      throw new StateMeshError("Time travel is not enabled. Pass `timeTravel` options to createMesh.", {
+        code: "STATEMESH_TIME_TRAVEL_NOT_ENABLED",
+        metadata: { mesh: name }
+      });
+    }
+    timeTravelRecording = true;
+  }
+
+  function disableTimeTravel(): void {
+    timeTravelRecording = false;
+  }
+
+  function getTimeTravelLog(): TimeTravelEntry<TState>[] {
+    return [...timeTravelLog];
+  }
+
+  function replayTo(index: number): void {
+    assertActive();
+    const entry = timeTravelLog[index];
+    if (!entry) {
+      throw new StateMeshError(`Time travel entry at index ${index} not found.`, {
+        code: "STATEMESH_TIME_TRAVEL_ENTRY_NOT_FOUND",
+        metadata: { mesh: name, index }
+      });
+    }
+    undoInProgress = true;
+    try {
+      commitState(cloneState(entry.stateAfter), {
+        type: "state.changed",
+        timestamp: Date.now(),
+        metadata: { phase: "replay", timeTravelIndex: index }
+      });
+    } finally {
+      undoInProgress = false;
+    }
+  }
+
+  function replayToTimestamp(timestamp: number): void {
+    assertActive();
+    if (timeTravelLog.length === 0) {
+      throw new StateMeshError("Time travel log is empty.", {
+        code: "STATEMESH_TIME_TRAVEL_LOG_EMPTY",
+        metadata: { mesh: name }
+      });
+    }
+    // Binary search for nearest entry
+    let lo = 0;
+    let hi = timeTravelLog.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      const entry = timeTravelLog[mid];
+      if (!entry) break;
+      if (entry.timestamp < timestamp) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    // Check if the previous entry is closer
+    const current = timeTravelLog[lo];
+    const previous = lo > 0 ? timeTravelLog[lo - 1] : undefined;
+    if (previous && current && Math.abs(previous.timestamp - timestamp) < Math.abs(current.timestamp - timestamp)) {
+      lo = lo - 1;
+    }
+    const target = timeTravelLog[lo];
+    if (target) replayTo(target.index);
+  }
+
+  function clearTimeTravelLog(): void {
+    timeTravelLog.length = 0;
+    timeTravelCounter = 0;
+  }
+
+  // --- Middleware Pipelines ---
+
+  function registerPipeline(pipelineName: string, stages: PipelineStage<TState>[], pipelineOptions: PipelineOptions = {}): Unsubscribe {
+    assertActive();
+    if (pipelines.has(pipelineName)) {
+      throw new DuplicateRegistrationError(`Pipeline "${pipelineName}" is already registered.`, {
+        metadata: { kind: "pipeline", name: pipelineName }
+      });
+    }
+    pipelines.set(pipelineName, { name: pipelineName, stages, options: pipelineOptions });
+    return () => { pipelines.delete(pipelineName); };
+  }
+
+  function removePipeline(pipelineName: string): boolean {
+    return pipelines.delete(pipelineName);
+  }
+
+  async function executePipeline(pipelineEntry: { stages: PipelineStage<TState>[]; options: PipelineOptions }, event: MeshEvent): Promise<void> {
+    let index = -1;
+
+    async function dispatch(stageIndex: number): Promise<void> {
+      if (stageIndex <= index) {
+        throw new StateMeshError("Pipeline next() called multiple times.", {
+          code: "STATEMESH_PIPELINE_NEXT_CALLED_TWICE",
+          metadata: { mesh: name }
+        });
+      }
+      index = stageIndex;
+      const stage = pipelineEntry.stages[stageIndex];
+      if (!stage) return;
+
+      const ctx: PipelineContext<TState> = {
+        event,
+        mesh,
+        state,
+        stageIndex,
+        stageName: stage.name
+      };
+
+      await stage.handler(ctx, () => dispatch(stageIndex + 1));
+    }
+
+    try {
+      await dispatch(0);
+    } catch {
+      // Pipeline errors are isolated — same contract as middleware.
+    }
+  }
+
+  function matchesPipelineFilter(event: MeshEvent, filter?: PipelineOptions["filter"]): boolean {
+    if (!filter) return true;
+    if (filter.type) {
+      const typeStr = event.type;
+      if (typeof filter.type === "string") {
+        if (filter.type.endsWith("*")) {
+          if (!typeStr.startsWith(filter.type.slice(0, -1))) return false;
+        } else if (typeStr !== filter.type) {
+          return false;
+        }
+      } else if (!filter.type.test(typeStr)) {
+        return false;
+      }
+    }
+    if (filter.name) {
+      const nameStr = (event as { name?: string }).name ?? "";
+      if (typeof filter.name === "string") {
+        if (filter.name.endsWith("*")) {
+          if (!nameStr.startsWith(filter.name.slice(0, -1))) return false;
+        } else if (nameStr !== filter.name) {
+          return false;
+        }
+      } else if (!filter.name.test(nameStr)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   function createStateEvent(path?: MeshPath, metadata?: Record<string, unknown>): MeshEvent {

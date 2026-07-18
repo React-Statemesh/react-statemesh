@@ -1380,6 +1380,69 @@ export type MeshSubscriptionOptions<TSelected> = {
   fireImmediately?: boolean;
 };
 
+/** Options for undo/redo. */
+export type MeshUndoOptions = {
+  /** Maximum number of undo entries retained. Oldest entries are evicted first. Defaults to 50. */
+  maxHistory?: number;
+  /** Only track these state paths for undo/redo. When omitted, the full state is tracked. */
+  paths?: readonly string[];
+};
+
+/** Options for time travel / state replay. */
+export type MeshTimeTravelOptions = {
+  /** Maximum number of time travel entries retained in the ring buffer. Defaults to 1000. */
+  maxEntries?: number;
+};
+
+/** One entry in the time travel log. */
+export type TimeTravelEntry<TState = unknown> = {
+  /** Sequential entry index. */
+  index: number;
+  /** The event that caused this state change. */
+  event: MeshEvent;
+  /** Deep clone of state before the change. */
+  stateBefore: TState;
+  /** Deep clone of state after the change. */
+  stateAfter: TState;
+  /** Entry timestamp. */
+  timestamp: number;
+};
+
+/** Context passed to each middleware pipeline stage. */
+export type PipelineContext<TState = unknown> = {
+  /** The event being processed. */
+  event: MeshEvent;
+  /** Current mesh instance. */
+  mesh: Mesh<TState>;
+  /** Current state at the time of pipeline execution. */
+  state: TState;
+  /** Zero-based stage index within the pipeline. */
+  stageIndex: number;
+  /** Registered name of the current stage. */
+  stageName: string;
+};
+
+/** One stage in a middleware pipeline. */
+export type PipelineStage<TState = unknown> = {
+  /** Unique stage name within the pipeline. */
+  name: string;
+  /** Handler that processes the event. Call `next()` to continue to the next stage. Return without calling `next()` to short-circuit. */
+  handler: (context: PipelineContext<TState>, next: () => Promise<void>) => MaybePromise<void>;
+};
+
+/** Options for a middleware pipeline. */
+export type PipelineOptions = {
+  /** Only run the pipeline for events matching this filter. */
+  filter?: {
+    /** Match event type exactly or with a RegExp. */
+    type?: string | RegExp;
+    /** Match event name field exactly or with a RegExp. */
+    name?: string | RegExp;
+  };
+  /** When to run the pipeline relative to existing middleware. Defaults to "before". */
+  phase?: "before" | "after";
+};
+
 /** Options for creating a mesh. */
 export type MeshOptions<TState> = {
   /** Human-readable mesh name used for persistence keys and events. */
@@ -1392,6 +1455,10 @@ export type MeshOptions<TState> = {
   logger?: boolean;
   /** Runtime profiler options. */
   profiler?: MeshProfilerOptions;
+  /** Undo/redo options. When provided, the mesh tracks state history for undo/redo operations. */
+  undo?: MeshUndoOptions;
+  /** Time travel options. When provided, the mesh can record and replay state changes. */
+  timeTravel?: MeshTimeTravelOptions;
 };
 
 /**
@@ -1620,6 +1687,47 @@ export type Mesh<TState = unknown> = {
   cancelResource: (name: string, params?: unknown) => void;
   /** Emit an event to middleware/plugin listeners. */
   emit: (event: MeshEvent) => void;
+
+  // --- Undo/Redo ---
+
+  /** Restore the previous state. No-op when the undo stack is empty. */
+  undo: () => void;
+  /** Restore the next state (undone by `undo`). No-op when the redo stack is empty. */
+  redo: () => void;
+  /** True when the undo stack has at least one entry. */
+  readonly canUndo: boolean;
+  /** True when the redo stack has at least one entry. */
+  readonly canRedo: boolean;
+  /** Current number of entries in the undo stack. */
+  readonly undoStackSize: number;
+  /** Current number of entries in the redo stack. */
+  readonly redoStackSize: number;
+  /** Clear both undo and redo stacks. */
+  clearUndoHistory: () => void;
+
+  // --- Time Travel ---
+
+  /** Start recording state changes for time travel. */
+  enableTimeTravel: () => void;
+  /** Stop recording state changes. Existing log is preserved. */
+  disableTimeTravel: () => void;
+  /** True when time travel recording is active. */
+  readonly isTimeTravelEnabled: boolean;
+  /** Return a copy of the time travel log. */
+  getTimeTravelLog: () => TimeTravelEntry<TState>[];
+  /** Restore the state that was recorded at the given log index. */
+  replayTo: (index: number) => void;
+  /** Restore the state recorded nearest to the given timestamp. */
+  replayToTimestamp: (timestamp: number) => void;
+  /** Clear the time travel log and free memory. */
+  clearTimeTravelLog: () => void;
+
+  // --- Middleware Pipelines ---
+
+  /** Register a named middleware pipeline. Pipelines use an Express-style `next()` pattern. */
+  pipeline: (name: string, stages: PipelineStage<TState>[], options?: PipelineOptions) => Unsubscribe;
+  /** Remove a previously registered pipeline. Returns true if the pipeline existed. */
+  removePipeline: (name: string) => boolean;
 };
 
 /** Filter for subscribing to specific events via `mesh.on`. */

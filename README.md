@@ -1,6 +1,6 @@
 # StateMesh
 
-StateMesh is a TypeScript-first, transaction-first state orchestration library for React. It starts with a small external store API, then adds the production pieces that usually become scattered across apps: named actions, optimized selectors, computed state, async transactions, optimistic UI, rollback, persistence, URL state, production forms, cross-tab sync, custom errors, logger hooks, and testing helpers.
+StateMesh is a TypeScript-first, transaction-first state orchestration library for React. It starts with a small external store API, then adds the production pieces that usually become scattered across apps: named actions, optimized selectors, computed state, async transactions, optimistic UI, rollback, persistence, URL state, production forms, cross-tab sync, custom errors, logger hooks, undo/redo, state time travel, middleware pipelines, and testing helpers.
 
 ```bash
 npm install react-statemesh
@@ -216,6 +216,93 @@ function CartUpdate() {
   );
 }
 ```
+
+## Undo/Redo
+
+StateMesh tracks state history for undo/redo operations automatically. Every state change captures a snapshot.
+
+```ts
+const mesh = createMesh({
+  state: { cart: { items: [] } },
+  undo: {
+    maxHistory: 50,            // Max undo entries (default 50)
+    paths: ["cart"]            // Optional: only track these paths
+  }
+});
+```
+
+```ts
+mesh.setPath("cart.items", [product]);
+mesh.setPath("cart.items", [product, accessory]);
+
+mesh.undo();                   // Restores cart.items to [product]
+mesh.redo();                   // Restores cart.items to [product, accessory]
+
+mesh.canUndo;                  // true
+mesh.canRedo;                  // true
+mesh.undoStackSize;            // 2
+mesh.redoStackSize;            // 1
+mesh.clearUndoHistory();       // Clears both stacks
+```
+
+Multiple state changes inside `mesh.batch()` are captured as a single undo entry. `mesh.reset()` pushes the pre-reset state to the undo stack. Undo/redo emit `state.changed` events with `metadata.phase` set to `"undo"` or `"redo"`.
+
+## State Replay / Time Travel
+
+Record all state changes and replay to any point in time. Useful for debugging, testing, and audit trails.
+
+```ts
+const mesh = createMesh({
+  state: { ... },
+  timeTravel: { maxEntries: 1000 }  // Ring buffer size (default 1000)
+});
+
+mesh.enableTimeTravel();
+
+// ... state changes happen ...
+
+const log = mesh.getTimeTravelLog();
+// log[0] = { index: 0, event, stateBefore, stateAfter, timestamp }
+
+mesh.replayTo(0);                // Restore state at log entry 0
+mesh.replayToTimestamp(ts);      // Restore state nearest to timestamp (O(log n))
+
+mesh.disableTimeTravel();        // Stop recording (preserves log)
+mesh.clearTimeTravelLog();       // Free memory
+```
+
+Replay does not trigger undo bookkeeping or re-recording. Each log entry holds full deep clones of state before and after the change.
+
+## Middleware Pipelines
+
+Named, composable middleware pipelines with an Express-style `next()` pattern. Unlike flat middleware, pipelines support short-circuiting, async stages, and before/after phasing.
+
+```ts
+mesh.pipeline("auth", [
+  {
+    name: "validate",
+    async handler(ctx, next) {
+      if (!ctx.state.auth.token) throw new Error("No auth");
+      await next();
+    }
+  },
+  {
+    name: "log",
+    handler(ctx, next) {
+      console.log(`[auth] ${ctx.event.type}`);
+      return next();    // Call next() to continue; omit to short-circuit
+    }
+  }
+], {
+  filter: { type: "resource.*" },  // Only run for resource events
+  phase: "before"                   // Run before existing middleware
+});
+
+// Remove later
+mesh.removePipeline("auth");
+```
+
+Each stage receives a `PipelineContext` with `event`, `mesh`, `state`, `stageIndex`, and `stageName`. Stages can be async. Pipeline errors are isolated and never break state mutations. Registering a duplicate pipeline name throws `DuplicateRegistrationError`.
 
 ## Transactions
 
@@ -1387,7 +1474,7 @@ The JavaScript support desk example mirrors the same app shape with `.jsx`, so t
 
 ## Test Coverage
 
-The library ships with **534 test cases across 16 test files** covering every module, API surface, error path, and edge case.
+The library ships with **603 test cases across 19 test files** covering every module, API surface, error path, and edge case.
 
 ### Coverage by Module
 
@@ -1407,6 +1494,9 @@ The library ships with **534 test cases across 16 test files** covering every mo
 | **Transactions** | 7 | `transactions.test.ts` | Transaction lifecycle, optimistic updates, rollback |
 | **Resources** | 15 | `resources.test.ts` | Resource fetch, cache, invalidation, pagination |
 | **React hooks** | 35 | `hooks-extended.test.ts` | Mesh API behind hooks: forms, transactions, actions, batch, resources, mutations, computed, router |
+| **Undo/Redo** | 27 | `undo-redo.test.ts` | `undo()`, `redo()`, canUndo/canRedo getters, maxHistory eviction, path-filtered undo, batch-aware undo, reset-aware undo |
+| **Time Travel** | 20 | `time-travel.test.ts` | `enableTimeTravel()`, `replayTo()`, `replayToTimestamp()`, ring buffer eviction, log entries, replay safety |
+| **Pipelines** | 22 | `pipelines.test.ts` | `pipeline()` registration, stage execution order, short-circuit, context, error isolation, filters, before/after phase, async stages |
 
 ### Running Tests
 

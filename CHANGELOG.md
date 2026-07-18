@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.6.0
+
+### Undo/Redo
+
+StateMesh now tracks state history for undo/redo operations. Every state change automatically captures a snapshot, and `undo()`/`redo()` restore previous/next states atomically.
+
+- **`mesh.undo()`.** Restore the previous state. No-op when the undo stack is empty.
+- **`mesh.redo()`.** Restore the next state (undone by `undo`). No-op when the redo stack is empty.
+- **`mesh.canUndo`.** True when the undo stack has at least one entry.
+- **`mesh.canRedo`.** True when the redo stack has at least one entry.
+- **`mesh.undoStackSize`.** Current number of entries in the undo stack.
+- **`mesh.redoStackSize`.** Current number of entries in the redo stack.
+- **`mesh.clearUndoHistory()`.** Clear both undo and redo stacks.
+- **`undo.maxHistory`.** Maximum undo entries retained. Oldest entries are evicted first. Defaults to 50.
+- **`undo.paths`.** Optional array of state paths to track. When omitted, the full state is tracked. Reduces memory by cloning only tracked paths.
+- **Batch-aware.** Multiple state changes inside `mesh.batch()` are captured as a single undo entry.
+- **Reset-aware.** `mesh.reset()` pushes the pre-reset state to the undo stack.
+- **Events.** Undo/redo emit `state.changed` events with `metadata.phase` set to `"undo"` or `"redo"`.
+
+### State Replay / Time Travel
+
+StateMesh can record all state changes and replay to any point in time. Useful for debugging, testing, and audit trails.
+
+- **`mesh.enableTimeTravel()`.** Start recording state changes.
+- **`mesh.disableTimeTravel()`.** Stop recording. Existing log is preserved.
+- **`mesh.isTimeTravelEnabled`.** True when recording is active.
+- **`mesh.getTimeTravelLog()`.** Return a copy of the recorded log. Each entry contains `index`, `event`, `stateBefore`, `stateAfter`, and `timestamp`.
+- **`mesh.replayTo(index)`.** Restore the state recorded at the given log index.
+- **`mesh.replayToTimestamp(timestamp)`.** Restore the state recorded nearest to the given timestamp. Uses binary search for O(log n) lookup.
+- **`mesh.clearTimeTravelLog()`.** Clear the log and free memory.
+- **`timeTravel.maxEntries`.** Ring buffer size. Oldest entries are evicted when exceeded. Defaults to 1000.
+- **Replay-safe.** Replay does not trigger undo bookkeeping or time travel re-recording.
+
+### Middleware Pipelines
+
+StateMesh supports named, composable middleware pipelines with an Express-style `next()` pattern. Unlike flat middleware, pipelines support short-circuiting, async stages, and before/after phasing relative to existing middleware.
+
+- **`mesh.pipeline(name, stages, options?)`.** Register a named pipeline. Each stage receives a `PipelineContext` (event, mesh, state, stageIndex, stageName) and a `next()` function. Call `next()` to continue to the next stage; return without calling `next()` to short-circuit.
+- **`mesh.removePipeline(name)`.** Remove a previously registered pipeline.
+- **`options.filter`.** Only run the pipeline for events matching `type` or `name` filters. Supports exact strings, RegExp, and `*` wildcard prefix matching.
+- **`options.phase`.** `"before"` (default) or `"after"` — when to run relative to existing flat middleware.
+- **Async-native.** Each stage can be async. The pipeline awaits each stage before continuing.
+- **Error-isolated.** Pipeline errors are caught and logged. They never break state mutations.
+- **Duplicate guard.** Registering a pipeline with the same name throws `DuplicateRegistrationError`.
+
 ## 0.5.0
 
 ### Comprehensive Test Suite
