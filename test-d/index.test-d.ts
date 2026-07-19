@@ -20,7 +20,6 @@ import {
   type QueuedMutation,
   type ResourceFetchOptions,
   type ResourceSnapshot,
-  type StateMeshDevtoolsProps,
   type StateMeshProviderProps,
   zodSchema,
   useMeshAction,
@@ -32,6 +31,7 @@ import {
   useMeshUrlState,
   useSuspenseMeshResource
 } from "../dist/index";
+import { type StateMeshDevtoolsProps } from "../dist/devtools";
 
 const mesh = createMesh({
   profiler: {
