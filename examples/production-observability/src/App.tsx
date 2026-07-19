@@ -2,7 +2,6 @@ import { Suspense } from "react";
 import {
   MeshComponent,
   MeshErrorBoundary,
-  StateMeshDevtools,
   StateMeshProvider,
   createMesh,
   createSelector,
@@ -11,6 +10,7 @@ import {
   useMeshState,
   useSuspenseMeshResource
 } from "react-statemesh";
+import { StateMeshDevtools } from "react-statemesh/devtools";
 
 type User = {
   id: string;

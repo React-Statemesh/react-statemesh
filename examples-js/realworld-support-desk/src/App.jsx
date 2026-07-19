@@ -1,6 +1,5 @@
 import React from "react";
 import {
-  StateMeshDevtools,
   StateMeshProvider,
   createApiClient,
   createMesh,
@@ -9,6 +8,7 @@ import {
   useMeshResource,
   zodSchema
 } from "react-statemesh";
+import { StateMeshDevtools } from "react-statemesh/devtools";
 
 const defaultFilters = { search: "", status: "open", priority: "all" };
 const tickets = [

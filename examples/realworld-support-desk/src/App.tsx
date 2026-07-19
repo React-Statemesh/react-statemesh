@@ -1,5 +1,4 @@
 import {
-  StateMeshDevtools,
   StateMeshProvider,
   useMeshComputed,
   useMeshForm,
@@ -8,6 +7,7 @@ import {
   useMeshSelector,
   useMeshUrlState
 } from "react-statemesh";
+import { StateMeshDevtools } from "react-statemesh/devtools";
 import {
   createSupportDeskExample,
   createTicketFormName,

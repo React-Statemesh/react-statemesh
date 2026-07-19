@@ -249,6 +249,9 @@ describe("actions and computed values", () => {
   });
 
   it("replaces duplicate registrations during Vite browser HMR", () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+
     const script = document.createElement("script");
     script.src = "/@vite/client";
     document.head.appendChild(script);
@@ -264,6 +267,8 @@ describe("actions and computed values", () => {
 
     forceDark(undefined);
     expect(mesh.getState().theme).toBe("dark");
+
+    process.env.NODE_ENV = originalNodeEnv;
   });
 
   it("caches computed values until a dependency changes", () => {

@@ -2,13 +2,13 @@ import React, { Suspense } from "react";
 import {
   MeshComponent,
   MeshErrorBoundary,
-  StateMeshDevtools,
   StateMeshProvider,
   createMesh,
   useMeshAction,
   useMeshState,
   useSuspenseMeshResource
 } from "react-statemesh";
+import { StateMeshDevtools } from "react-statemesh/devtools";
 
 export function createProductionObservabilityExample() {
   const mesh = createMesh({

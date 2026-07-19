@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act } from "react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LoginPageApp, { createLoginExample as createLogin } from "../../examples/login-page/src/App";
 import ProductionObservabilityApp from "../../examples/production-observability/src/App";

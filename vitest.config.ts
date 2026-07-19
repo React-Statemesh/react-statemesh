@@ -12,9 +12,13 @@ export default defineConfig({
       { find: "react-statemesh", replacement: fileURLToPath(new URL("./src/index.ts", import.meta.url)) }
     ]
   },
+  define: {
+    "process.env.NODE_ENV": '"development"'
+  },
   test: {
     globals: true,
     environment: "jsdom",
+    setupFiles: ["./tests/setup.ts"],
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
     coverage: {
       reporter: ["text", "lcov"],
