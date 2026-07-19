@@ -32,7 +32,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainer via [GitHub Issues](https://github.com/prakashaditya13/react-statemesh/issues) or by opening a private security advisory.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainer via [GitHub Issues](https://github.com/React-Statemesh/react-statemesh/issues) or by opening a private security advisory.
 
 All complaints will be reviewed and investigated promptly and fairly. The project maintainer is obligated to maintain confidentiality with regard to the reporter of an incident.
 

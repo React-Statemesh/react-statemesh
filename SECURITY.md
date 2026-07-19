@@ -13,7 +13,7 @@
 
 If you discover a security vulnerability in StateMesh, report it privately:
 
-1. **Email:** Open a private security advisory on [GitHub](https://github.com/prakashaditya13/react-statemesh/security/advisories/new)
+1. **Email:** Open a private security advisory on [GitHub](https://github.com/React-Statemesh/react-statemesh/security/advisories/new)
 2. **Include:**
    - Description of the vulnerability
    - Steps to reproduce

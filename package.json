@@ -60,6 +60,9 @@
     "test:types": "tsd",
     "lint": "eslint src tests",
     "bench": "tsx benchmarks/basic.ts",
+    "docs:dev": "npm run --prefix docs dev",
+    "docs:build": "npm run --prefix docs build",
+    "docs:preview": "npm run --prefix docs preview",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build:clean && pnpm test:types"
   },
   "keywords": [
@@ -86,19 +89,19 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/prakashaditya13/react-statemesh.git"
+    "url": "git+https://github.com/React-Statemesh/react-statemesh.git"
   },
   "bugs": {
-    "url": "https://github.com/prakashaditya13/react-statemesh/issues"
+    "url": "https://github.com/React-Statemesh/react-statemesh/issues"
   },
-  "homepage": "https://github.com/prakashaditya13/react-statemesh#readme",
+  "homepage": "https://github.com/React-Statemesh/react-statemesh#readme",
   "engines": {
     "node": ">=18.0.0"
   },
   "packageManager": "pnpm@9.15.4",
   "funding": {
     "type": "github",
-    "url": "https://github.com/sponsors/prakashaditya13"
+    "url": "https://github.com/sponsors/React-Statemesh"
   },
   "peerDependencies": {
     "react": ">=18.0.0",

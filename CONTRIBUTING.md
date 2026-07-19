@@ -6,7 +6,7 @@ Thanks for your interest in contributing to StateMesh. This document covers the 
 
 ```bash
 # Clone the repository
-git clone https://github.com/prakashaditya13/react-statemesh.git
+git clone https://github.com/React-Statemesh/react-statemesh.git
 cd react-statemesh
 
 # Install dependencies (pnpm is required)
@@ -112,7 +112,7 @@ examples-js/     # Plain JavaScript React examples
 
 ## Reporting Bugs
 
-Use the [bug report template](https://github.com/prakashaditya13/react-statemesh/issues/new?template=bug_report.md). Include:
+Use the [bug report template](https://github.com/React-Statemesh/react-statemesh/issues/new?template=bug_report.md). Include:
 
 - StateMesh version
 - React version
@@ -122,7 +122,7 @@ Use the [bug report template](https://github.com/prakashaditya13/react-statemesh
 
 ## Requesting Features
 
-Use the [feature request template](https://github.com/prakashaditya13/react-statemesh/issues/new?template=feature_request.md). Describe:
+Use the [feature request template](https://github.com/React-Statemesh/react-statemesh/issues/new?template=feature_request.md). Describe:
 
 - The problem you're trying to solve
 - How you'd use the feature in your app
