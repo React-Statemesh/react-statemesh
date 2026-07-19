@@ -63,7 +63,7 @@
     "docs:dev": "npm run --prefix docs dev",
     "docs:build": "npm run --prefix docs build",
     "docs:preview": "npm run --prefix docs preview",
-    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build:clean && pnpm test:types"
+    "prepublishOnly": "npm run typecheck && npm test && npm run build:clean && npm run test:types"
   },
   "keywords": [
     "react",
