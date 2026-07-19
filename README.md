@@ -15,10 +15,10 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/react-statemesh"><img src="https://img.shields.io/npm/v/react-statemesh?style=flat-square&color=blue" alt="npm version" /></a>
-  <a href="https://bundlephobia.com/package/react-statemesh"><img src="https://img.shields.io/bundlephobia/minzip/react-statemesh?style=flat-square" alt="bundle size" /></a>
-  <a href="https://github.com/React-Statemesh/react-statemesh/blob/master/LICENSE"><img src="https://img.shields.io/npm/l/react-statemesh?style=flat-square&color=green" alt="license" /></a>
-  <a href="https://www.npmjs.com/package/react-statemesh"><img src="https://img.shields.io/npm/dm/react-statemesh?style=flat-square" alt="downloads" /></a>
+  <a href="https://www.npmjs.com/package/statemesh-core"><img src="https://img.shields.io/npm/v/statemesh-core?style=flat-square&color=blue" alt="npm version" /></a>
+  <a href="https://bundlephobia.com/package/statemesh-core"><img src="https://img.shields.io/bundlephobia/minzip/statemesh-core?style=flat-square" alt="bundle size" /></a>
+  <a href="https://github.com/React-Statemesh/react-statemesh/blob/master/LICENSE"><img src="https://img.shields.io/npm/l/statemesh-core?style=flat-square&color=green" alt="license" /></a>
+  <a href="https://www.npmjs.com/package/statemesh-core"><img src="https://img.shields.io/npm/dm/statemesh-core?style=flat-square" alt="downloads" /></a>
 </p>
 
 ---

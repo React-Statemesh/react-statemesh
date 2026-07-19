@@ -199,7 +199,7 @@ export type DevtoolsEventCategory =
 
 /** Full debug report exported from DevTools via the Export button. Contains a snapshot and recent events. */
 export type StateMeshDebugReport = {
-  type: "react-statemesh.debug-report";
+  type: "statemesh-core.debug-report";
   version: 1;
   exportedAt: number;
   snapshot: MeshDevtoolsSnapshot;
@@ -321,7 +321,7 @@ export function StateMeshDevtools<TState = unknown>({
 
   const debugReport = useMemo<StateMeshDebugReport>(
     () => ({
-      type: "react-statemesh.debug-report",
+      type: "statemesh-core.debug-report",
       version: 1,
       exportedAt: Date.now(),
       snapshot,
