@@ -1,4 +1,4 @@
-import { StateMeshProvider, createMesh, useMeshAction, useMeshState } from "@statemesh/react";
+import { StateMeshProvider, createMesh, useMeshAction, useMeshState } from "statemesh-core";
 
 const mesh = createMesh({
   name: "basic-counter-js",

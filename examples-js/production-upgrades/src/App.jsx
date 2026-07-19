@@ -7,7 +7,7 @@ import {
   useMeshForm,
   useMeshResource,
   useMeshUrlState
-} from "@statemesh/react";
+} from "statemesh-core";
 
 const products = [
   { id: "keyboard", name: "Keyboard", category: "hardware" },

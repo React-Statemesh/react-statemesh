@@ -1,4 +1,4 @@
-import { StateMeshProvider, createMesh, tabSyncPlugin, useMeshAction, useMeshComputed } from "@statemesh/react";
+import { StateMeshProvider, createMesh, tabSyncPlugin, useMeshAction, useMeshComputed } from "statemesh-core";
 
 type CartItem = {
   id: string;

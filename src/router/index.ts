@@ -31,7 +31,7 @@ export type { HistoryAdapter, HistoryLocation, HistoryEntry } from "./historyAda
 export { updateDocumentMeta } from "./meta";
 export type { RouteMeta } from "./meta";
 
-// React router components — import from "@statemesh/react/router"
+// React router components — import from "statemesh-core/router"
 export { RouterProvider, useRouter, type RouterProviderProps } from "../react/RouterProvider";
 export { Outlet } from "../react/Outlet";
 export { Link, type LinkProps } from "../react/Link";

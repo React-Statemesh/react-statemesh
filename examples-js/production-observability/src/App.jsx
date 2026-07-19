@@ -7,8 +7,8 @@ import {
   useMeshAction,
   useMeshState,
   useSuspenseMeshResource
-} from "@statemesh/react";
-import { StateMeshDevtools } from "@statemesh/react/devtools";
+} from "statemesh-core";
+import { StateMeshDevtools } from "statemesh-core/devtools";
 
 export function createProductionObservabilityExample() {
   const mesh = createMesh({

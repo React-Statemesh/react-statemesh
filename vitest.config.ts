@@ -4,12 +4,12 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   resolve: {
     alias: [
-      { find: "@statemesh/react/devtools", replacement: fileURLToPath(new URL("./src/devtools/index.ts", import.meta.url)) },
-      { find: "@statemesh/react/resources", replacement: fileURLToPath(new URL("./src/resources/index.ts", import.meta.url)) },
-      { find: "@statemesh/react/persist", replacement: fileURLToPath(new URL("./src/persist/index.ts", import.meta.url)) },
-      { find: "@statemesh/react/sync", replacement: fileURLToPath(new URL("./src/sync/index.ts", import.meta.url)) },
-      { find: "@statemesh/react/testing", replacement: fileURLToPath(new URL("./src/testing/index.ts", import.meta.url)) },
-      { find: "@statemesh/react", replacement: fileURLToPath(new URL("./src/index.ts", import.meta.url)) }
+      { find: "statemesh-core/devtools", replacement: fileURLToPath(new URL("./src/devtools/index.ts", import.meta.url)) },
+      { find: "statemesh-core/resources", replacement: fileURLToPath(new URL("./src/resources/index.ts", import.meta.url)) },
+      { find: "statemesh-core/persist", replacement: fileURLToPath(new URL("./src/persist/index.ts", import.meta.url)) },
+      { find: "statemesh-core/sync", replacement: fileURLToPath(new URL("./src/sync/index.ts", import.meta.url)) },
+      { find: "statemesh-core/testing", replacement: fileURLToPath(new URL("./src/testing/index.ts", import.meta.url)) },
+      { find: "statemesh-core", replacement: fileURLToPath(new URL("./src/index.ts", import.meta.url)) }
     ]
   },
   define: {

@@ -38,11 +38,11 @@
 ## Quick Start
 
 ```bash
-npm install @statemesh/react
+npm install statemesh-core
 ```
 
 ```tsx
-import { createMesh, StateMeshProvider, useMeshState } from "@statemesh/react";
+import { createMesh, StateMeshProvider, useMeshState } from "statemesh-core";
 
 const mesh = createMesh({
   state: { count: 0 }

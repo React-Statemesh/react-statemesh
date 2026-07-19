@@ -8,7 +8,7 @@ import {
   useMeshForm,
   useMeshSelector,
   useMeshMutation
-} from "@statemesh/react";
+} from "statemesh-core";
 
 const selectIsAuthenticated = createSelector(
   [(state) => state.auth.token],

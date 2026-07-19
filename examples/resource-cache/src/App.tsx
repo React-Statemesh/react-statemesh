@@ -1,4 +1,4 @@
-import { StateMeshProvider, createApiClient, createMesh, useMeshMutation, useMeshResource } from "@statemesh/react";
+import { StateMeshProvider, createApiClient, createMesh, useMeshMutation, useMeshResource } from "statemesh-core";
 
 type Product = {
   id: string;

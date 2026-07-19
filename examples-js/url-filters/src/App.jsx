@@ -1,4 +1,4 @@
-import { StateMeshProvider, createMesh, useMeshUrlState } from "@statemesh/react";
+import { StateMeshProvider, createMesh, useMeshUrlState } from "statemesh-core";
 
 const mesh = createMesh({
   name: "url-filters-js",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMeshState } from "@statemesh/react";
+import { useMeshState } from "statemesh-core";
 
 export default function Page() {
   const [theme, setTheme] = useMeshState<"light" | "dark">("theme");

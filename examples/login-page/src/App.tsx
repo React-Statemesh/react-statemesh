@@ -7,7 +7,7 @@ import {
   useMeshForm,
   useMeshSelector,
   useMeshMutation
-} from "@statemesh/react";
+} from "statemesh-core";
 
 type User = {
   id: string;

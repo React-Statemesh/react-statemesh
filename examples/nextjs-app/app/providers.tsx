@@ -1,6 +1,6 @@
 "use client";
 
-import { StateMeshProvider, createMesh } from "@statemesh/react";
+import { StateMeshProvider, createMesh } from "statemesh-core";
 import type { ReactNode } from "react";
 
 const mesh = createMesh({

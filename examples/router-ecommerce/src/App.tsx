@@ -7,7 +7,7 @@ import {
   useMeshSelector,
   useMeshAction,
   useSuspenseMeshResource
-} from "@statemesh/react";
+} from "statemesh-core";
 import {
   defineRoutes,
   redirect,
@@ -21,7 +21,7 @@ import {
   SharedElement,
   updateDocumentMeta,
   backoff
-} from "@statemesh/react/router";
+} from "statemesh-core/router";
 
 // ============================================================================
 // Types
