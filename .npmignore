@@ -1,0 +1,28 @@
+# Source and development files
+src/
+tests/
+test-d/
+examples/
+examples-js/
+benchmarks/
+.commandcode/
+.vscode/
+.github/
+
+# Config files
+tsconfig.json
+tsconfig.build.json
+tsup.config.ts
+vitest.config.ts
+eslint.config.js
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
+# Development artifacts
+*.tgz
+.DS_Store
+*.log
+coverage/
+
+# Keep only what npm needs
+# dist/, README.md, LICENSE, CHANGELOG.md, package.json are included via "files" in package.json
