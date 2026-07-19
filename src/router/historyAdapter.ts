@@ -1,11 +1,18 @@
+/** Current browser or memory location with pathname, search string, and hash. */
 export type HistoryLocation = {
+  /** URL pathname (e.g. `/products/kbd`). */
   pathname: string;
+  /** URL search string including `?` (e.g. `?q=keyboard`). */
   search: string;
+  /** URL hash including `#` (e.g. `#reviews`). */
   hash: string;
 };
 
+/** One location entry in the history stack with its associated state. */
 export type HistoryEntry = {
+  /** The location at this entry. */
   location: HistoryLocation;
+  /** Arbitrary state associated with this history entry (via `pushState`/`replaceState`). */
   state: unknown;
 };
 

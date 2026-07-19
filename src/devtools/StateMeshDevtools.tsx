@@ -11,6 +11,7 @@ import type {
 } from "../core/types";
 import { formatEvent } from "./eventFormatter";
 
+/** `"light"` or `"dark"` theme for the DevTools dock. Toggle at runtime via the header button. */
 export type DevtoolsTheme = "light" | "dark";
 
 type ThemePalette = {
@@ -168,6 +169,7 @@ export type StateMeshDevtoolsProps<TState = unknown> = {
   theme?: DevtoolsTheme;
 };
 
+/** Active tab in the DevTools dock. Each view shows a different aspect of the mesh. */
 export type DevtoolsView =
   | "overview"
   | "state"
@@ -181,6 +183,7 @@ export type DevtoolsView =
   | "doctor"
   | "events";
 
+/** Event category used to filter the Events tab in DevTools. */
 export type DevtoolsEventCategory =
   | "state"
   | "action"
@@ -194,6 +197,7 @@ export type DevtoolsEventCategory =
   | "api"
   | "mesh";
 
+/** Full debug report exported from DevTools via the Export button. Contains a snapshot and recent events. */
 export type StateMeshDebugReport = {
   type: "react-statemesh.debug-report";
   version: 1;
