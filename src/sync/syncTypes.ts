@@ -15,6 +15,8 @@ export type TabSyncOptions = {
   strategy?: TabSyncStrategy;
   /** Optional fixed tab ID, mostly useful for tests. */
   sourceTabId?: string;
+  /** Debounce delay in milliseconds for batching sync messages. Defaults to 50. */
+  debounce?: number;
 };
 
 /** Internal sync message sent between browser tabs. */

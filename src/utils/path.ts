@@ -1,14 +1,39 @@
+import { StateMeshError } from "../errors/StateMeshError";
+
 /** Path value accepted by StateMesh path helpers. */
 export type Path = string | readonly (string | number)[];
 
 // Cache of parsed path segments keyed by the original path string.
-// Path strings are typically constant literals in user code (e.g. "cart.items"),
-// so the cache hit rate is near 100% and we avoid repeated string splitting.
-const pathCache = new Map<string, Array<string | number>>();
+// Uses LRU eviction: oldest entry removed when capacity is reached.
+const pathCache = new Map<string, ReadonlyArray<string | number>>();
+const PATH_CACHE_MAX = 1_000;
+
+// Dangerous path segments that could cause prototype pollution.
+const DANGEROUS_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+
+/** Reject path segments that could cause prototype pollution. */
+function validatePathSegments(parts: Array<string | number>): void {
+  for (const part of parts) {
+    if (typeof part === "string" && DANGEROUS_SEGMENTS.has(part)) {
+      throw new StateMeshError(
+        `Refusing to traverse dangerous path segment: "${part}". ` +
+        `Path segments "__proto__", "constructor", and "prototype" are blocked to prevent prototype pollution.`,
+        {
+          code: "STATEMESH_DANGEROUS_PATH",
+          metadata: { segment: part }
+        }
+      );
+    }
+  }
+}
 
 /** Convert a dot path or array path into normalized path segments. */
-export function parsePath(path: Path): Array<string | number> {
-  if (typeof path !== "string") return [...path];
+export function parsePath(path: Path): ReadonlyArray<string | number> {
+  if (typeof path !== "string") {
+    const arr = [...path];
+    validatePathSegments(arr);
+    return arr;
+  }
   if (path.trim() === "") return [];
 
   const cached = pathCache.get(path);
@@ -19,12 +44,17 @@ export function parsePath(path: Path): Array<string | number> {
     return Number.isInteger(numeric) && part.trim() !== "" && String(numeric) === part ? numeric : part;
   });
 
-  // Bounded cache to prevent unbounded memory growth from dynamic paths.
-  if (pathCache.size < 1_000) {
-    pathCache.set(path, parts);
-  }
+  validatePathSegments(parts);
 
-  return parts;
+  // LRU: delete and re-insert to move to end (most recently used)
+  if (pathCache.size >= PATH_CACHE_MAX) {
+    const oldest = pathCache.keys().next().value;
+    if (oldest !== undefined) pathCache.delete(oldest);
+  }
+  const frozen = Object.freeze(parts);
+  pathCache.set(path, frozen);
+
+  return frozen;
 }
 
 /** Read a nested value by path. Returns `undefined` when any segment is missing. */

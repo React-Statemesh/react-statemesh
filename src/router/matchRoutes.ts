@@ -108,7 +108,7 @@ export function buildPath(pattern: string, params: Record<string, string> = {}):
   // Replace catch-all
   if (path.includes("*")) {
     const splat = params["splat"] ?? params["*"] ?? "";
-    path = path.replace(/\*[^/]*/g, splat);
+    path = path.replace(/\*[^/]*/g, encodeURIComponent(splat));
   }
   // Clean trailing slashes (except root)
   if (path.length > 1 && path.endsWith("/")) {

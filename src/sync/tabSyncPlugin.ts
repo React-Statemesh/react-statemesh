@@ -23,6 +23,8 @@ export function tabSyncPlugin<TState>(options: TabSyncOptions): MeshPlugin<TStat
   const channelName = options.channel ?? "statemesh";
   const sourceTabId = options.sourceTabId ?? createSourceTabId();
   const keys = options.keys.filter((key) => !(options.blacklist ?? []).includes(key));
+  const allowedKeys = new Set(keys);
+  const debounceMs = options.debounce ?? 50;
 
   return {
     name: `tab-sync:${channelName}`,
@@ -30,18 +32,39 @@ export function tabSyncPlugin<TState>(options: TabSyncOptions): MeshPlugin<TStat
       if (!isBrowser()) return;
 
       let applyingRemote = false;
+      let lastAppliedTimestamp = 0;
+      let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+      const changedKeys = new Set<string>();
+
+      const flushSync = () => {
+        if (applyingRemote || changedKeys.size === 0) return;
+        const keysToSend = [...changedKeys];
+        changedKeys.clear();
+        transport.post({
+          type: "statemesh.sync",
+          sourceTabId,
+          keys: keysToSend,
+          values: pickPaths(mesh.getState(), keysToSend),
+          timestamp: Date.now()
+        });
+      };
 
       const onMessage = (message: TabSyncMessage) => {
         if (message.type !== "statemesh.sync" || message.sourceTabId === sourceTabId) return;
+        // Ignore stale messages (timestamp older than last applied)
+        if (message.timestamp <= lastAppliedTimestamp) return;
         applyingRemote = true;
         try {
           for (const key of message.keys) {
+            // Only apply keys that are in our whitelist
+            if (!allowedKeys.has(key)) continue;
             mesh.setPath(key, message.values[key], {
               source: "tab-sync",
               sourceTabId: message.sourceTabId,
               timestamp: message.timestamp
             });
           }
+          lastAppliedTimestamp = message.timestamp;
           emit({
             type: "sync.received",
             sourceTabId: message.sourceTabId,
@@ -67,13 +90,13 @@ export function tabSyncPlugin<TState>(options: TabSyncOptions): MeshPlugin<TStat
           key,
           () => {
             if (applyingRemote) return;
-            transport.post({
-              type: "statemesh.sync",
-              sourceTabId,
-              keys,
-              values: pickPaths(mesh.getState(), keys),
-              timestamp: Date.now()
-            });
+            changedKeys.add(key);
+            if (!pendingTimer) {
+              pendingTimer = setTimeout(() => {
+                pendingTimer = null;
+                flushSync();
+              }, debounceMs);
+            }
           },
           { equality: Object.is }
         )
@@ -81,6 +104,7 @@ export function tabSyncPlugin<TState>(options: TabSyncOptions): MeshPlugin<TStat
 
       return () => {
         for (const unsubscribe of unsubscribes) unsubscribe();
+        if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
         transport.close();
       };
     }

@@ -274,7 +274,7 @@ describe("Router — Edge Cases", () => {
   });
 
   it("buildPath with catch-all * replacement", () => {
-    expect(buildPath("/files/*", { "*": "docs/readme.md" })).toBe("/files/docs/readme.md");
+    expect(buildPath("/files/*", { "*": "docs/readme.md" })).toBe("/files/docs%2Freadme.md");
   });
 
   it("buildPath leaves literal :key when param missing", () => {

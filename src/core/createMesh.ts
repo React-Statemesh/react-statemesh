@@ -141,6 +141,7 @@ type ResourceEntry = {
   controller: AbortController | null;
   inFlight: Promise<unknown> | null;
   gcTimer: ReturnType<typeof setTimeout> | null;
+  generation: number;
 };
 
 type MutationRuntime = {
@@ -265,6 +266,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   const lastResourceStatuses = new Map<string, ResourceStatus>();
 
   const subscriptions = new Set<Subscription<TState, unknown>>();
+  let subscriptionsSnapshot: Subscription<TState, unknown>[] | null = null;
   const eventListeners = new Set<(event: MeshEvent) => void | Promise<void>>();
   const middlewares = new Set<MeshMiddleware<TState>>();
   const guards = new Set<GuardEntry<TState>>();
@@ -1084,6 +1086,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     if (destroyed) return;
     destroyed = true;
     subscriptions.clear();
+    subscriptionsSnapshot = null;
     eventListeners.clear();
     middlewares.clear();
     guards.clear();
@@ -1134,6 +1137,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     urlStates.clear();
     for (const entry of formEntries.values()) {
       entry.autosave?.cancel();
+      for (const debounced of entry.fieldValidationDebounces.values()) debounced.cancel();
+      entry.fieldValidationDebounces.clear();
       entry.listeners.clear();
     }
     formEntries.clear();
@@ -1145,6 +1150,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     redoStack.length = 0;
     timeTravelLog.length = 0;
     pipelines.clear();
+    if (devtoolsNotifyTimer) { clearTimeout(devtoolsNotifyTimer); devtoolsNotifyTimer = null; }
+    lastResourceStatuses.clear();
+    transactionOptions.clear();
   }
 
   function subscribe<TSelected>(
@@ -1162,6 +1170,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     };
 
     subscriptions.add(subscription as Subscription<TState, unknown>);
+    subscriptionsSnapshot = null;
 
     if (subscriptionOptions.fireImmediately) {
       listener(subscription.lastValue, subscription.lastValue);
@@ -1169,11 +1178,14 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
 
     return () => {
       subscriptions.delete(subscription as Subscription<TState, unknown>);
+      subscriptionsSnapshot = null;
     };
   }
 
   function notifySubscriptions(event?: MeshEvent): void {
-    for (const subscription of Array.from(subscriptions)) {
+    // Use cached snapshot; invalidated when subscriptions change
+    const subs = subscriptionsSnapshot ??= [...subscriptions];
+    for (const subscription of subs) {
       let selected: unknown;
       try {
         selected = subscription.selector(state);
@@ -1408,7 +1420,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       try {
         next = getComputed(computedName);
       } catch {
-        for (const listener of entry.listeners) listener();
+        // Mark as dirty so next read will recompute. Don't notify with stale data.
+        entry.dirty = true;
+        entry.hasValue = false;
         continue;
       }
 
@@ -1686,7 +1700,12 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
             if (definition.retry?.onRetry) {
               definition.retry.onRetry(attempt, lastError, context as TransactionContext<unknown>);
             }
-            await delay(getRetryDelay(definition.retry?.delay, attempt, lastError));
+            const elapsed = Date.now() - startedAt;
+            const remaining = totalTimeout ? totalTimeout - elapsed : Infinity;
+            if (remaining <= 0) break;
+            const computedDelay = getRetryDelay(definition.retry?.delay, attempt, lastError);
+            const retryDelay = totalTimeout ? Math.min(computedDelay, remaining) : computedDelay;
+            await delay(retryDelay, controller.signal);
             if (totalTimeout && Date.now() - startedAt >= totalTimeout) {
               break;
             }
@@ -2000,6 +2019,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
 
     const controller = new AbortController();
     const startedAt = Date.now();
+    const fetchGeneration = ++entry.generation;
     entry.controller = controller;
     entry.startedAt = startedAt;
     entry.error = null;
@@ -2031,6 +2051,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     const promise = Promise.resolve()
       .then(() => definition.fetch(params as TParams, context))
       .then((result) => {
+        // Stale response guard: a newer fetch started for this entry
+        if (entry.generation !== fetchGeneration) return result;
         const finishedAt = Date.now();
         const nextPages = append ? [...entry.pages, result] : [result];
         const nextPageParams = append ? [...entry.pageParams, fetchOptions.pageParam] : [fetchOptions.pageParam];
@@ -2073,6 +2095,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
             cause: error,
             metadata: { resource: resourceName, key }
           });
+        // Stale response guard: a newer fetch started for this entry
+        if (entry.generation !== fetchGeneration) throw wrapped;
         entry.status = entry.data === null || entry.data === undefined ? "error" : entry.status;
         entry.pending = false;
         entry.fetching = false;
@@ -2263,7 +2287,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
         updatedAt: snapshotEntry.updatedAt,
         controller: null,
         inFlight: null,
-        gcTimer: null
+        gcTimer: null,
+        generation: 0
       };
       resourceEntries.set(snapshotEntry.key, entry);
       scheduleResourceGc(entry, definition);
@@ -2548,7 +2573,9 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
     const startedAt = Date.now();
     const controller = new AbortController();
     const stateSnapshot = cloneState(state);
-    const resourceSnapshot = cloneResourceEntries();
+    // Only clone resource cache when rollback is needed (optimistic or explicit rollback)
+    const needsResourceSnapshot = definition.rollback !== undefined || definition.optimistic !== undefined;
+    const resourceSnapshot = needsResourceSnapshot ? cloneResourceEntries() : null;
     runtime.controller = controller;
     runtime.lastPayload = payload;
     const context = createMutationContext(mutationName, payload, controller.signal);
@@ -2626,7 +2653,7 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
 
       const shouldRollback = definition.rollback === true || (definition.rollback === undefined && Boolean(definition.optimistic));
       if (shouldRollback) {
-        restoreResourceEntries(resourceSnapshot);
+        if (resourceSnapshot) restoreResourceEntries(resourceSnapshot);
         commitState(cloneState(stateSnapshot), createStateEvent(undefined, { mutation: mutationName, phase: "rollback" }));
         dispatchEvent({ type: "mutation.rollback", name: mutationName, timestamp: Date.now(), metadata: { mesh: name } });
       } else if (typeof definition.rollback === "function") {
@@ -3309,6 +3336,11 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
   }
 
   function snapshot(label?: string): Snapshot<TState> {
+    const maxSnapshots = 50;
+    if (snapshots.size >= maxSnapshots) {
+      const oldest = snapshots.keys().next().value;
+      if (oldest !== undefined) snapshots.delete(oldest);
+    }
     const id = `snapshot_${Date.now()}_${++idCounter}`;
     const snap: Snapshot<TState> = {
       id,
@@ -4381,7 +4413,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       updatedAt: now,
       controller: null,
       inFlight: null,
-      gcTimer: null
+      gcTimer: null,
+      generation: 0
     };
     resourceEntries.set(key, entry);
     scheduleResourceGc(entry, definition);
@@ -4522,7 +4555,8 @@ export function createMesh<TState>(options: MeshOptions<TState>): Mesh<TState> {
       pageParams: cloneState(entry.pageParams),
       controller: null,
       inFlight: null,
-      gcTimer: null
+      gcTimer: null,
+      generation: entry.generation ?? 0
     };
   }
 
@@ -4914,7 +4948,16 @@ function isResourceTagArray(value: ResourceInvalidation): value is readonly Reso
 
 function stableResourceHash(value: unknown): string {
   if (value === undefined) return "undefined";
+  if (value === null) return "null";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  // Fast-path for arrays of primitives (common React-Query-style keys)
+  if (Array.isArray(value) && value.every(isPrimitive)) return value.join("/");
   return JSON.stringify(sortResourceKey(value));
+}
+
+function isPrimitive(value: unknown): boolean {
+  return value === null || (typeof value !== "object" && typeof value !== "function");
 }
 
 function sortResourceKey(value: unknown): unknown {
@@ -4943,8 +4986,12 @@ function catchAsyncError(result: unknown): void {
     "catch" in result &&
     typeof (result as { catch?: unknown }).catch === "function"
   ) {
-    (result as Promise<unknown>).catch(() => {
+    (result as Promise<unknown>).catch((error) => {
       // Middleware and plugin listeners are observational and must not crash the app.
+      // But we surface the error so developers can debug broken middleware.
+      if (typeof console !== "undefined" && console.error) {
+        console.error("[StateMesh] Unhandled error in middleware/plugin/listener:", error);
+      }
     });
   }
 }
@@ -5023,8 +5070,15 @@ function pathsIntersect(a: string, b: string): boolean {
   return a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
 }
 
-function delay(ms = 0): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms = 0, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason ?? new Error("Aborted")); return; }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error("Aborted"));
+    }, { once: true });
+  });
 }
 
 function getRetryDelay(delayOption: number | ((attempt: number, error: Error) => number) | undefined, attempt: number, error: Error): number {

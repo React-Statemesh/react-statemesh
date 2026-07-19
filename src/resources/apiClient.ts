@@ -556,6 +556,12 @@ function mergeHeaders(target: Headers, source?: HeadersInit): void {
 }
 
 function buildUrl(baseUrl: string | undefined, path: string, query?: ApiRequestOptions["query"]): string {
+  if (path.includes("..")) {
+    throw new ApiClientError("Path traversal detected in API request path.", {
+      code: "STATEMESH_API_PATH_TRAVERSAL",
+      metadata: { path }
+    });
+  }
   const pathIsAbsolute = isAbsoluteUrl(path);
   const url = pathIsAbsolute
     ? new URL(path)
