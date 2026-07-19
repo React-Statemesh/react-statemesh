@@ -94,7 +94,7 @@
   "bugs": {
     "url": "https://github.com/React-Statemesh/react-statemesh/issues"
   },
-  "homepage": "https://github.com/React-Statemesh/react-statemesh#readme",
+  "homepage": "https://react-statemesh.github.io/statemesh-docs/",
   "engines": {
     "node": ">=18.0.0"
   },
