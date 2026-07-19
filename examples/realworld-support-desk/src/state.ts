@@ -1,13 +1,13 @@
 import {
   createApiClient,
   createMesh,
-  loggerPlugin,
   tabSyncPlugin,
   zodSchema,
   type EntityCollection,
   type ResourceSnapshot,
   type StorageAdapter
 } from "react-statemesh";
+import { loggerPlugin } from "react-statemesh/devtools";
 
 export type TicketStatus = "open" | "pending" | "closed";
 export type TicketPriority = "low" | "medium" | "high";
