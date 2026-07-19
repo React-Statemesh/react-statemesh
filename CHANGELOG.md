@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.0.0
+
+**Initial stable release.**
+
+StateMesh is a TypeScript-first, transaction-first state orchestration library for React. This is the first public release with a stable API, 603 tests across 19 files, and production-grade guarantees.
+
+### What's included
+
+- **Core mesh store.** External store with `getState`, `setState`, `setPath`, `reset`, `subscribe` with selector/equality support, and optimized path-based subscriptions.
+- **Named actions.** `mesh.action(name, handler)` and `mesh.runAction(name, payload)` with error wrapping.
+- **Batch operations.** `mesh.batch(fn)` groups multiple state updates into a single notification flush.
+- **Computed state.** `mesh.computed(name, deps, compute)` with automatic dirty tracking, dependency intersection, and value caching.
+- **Async transactions.** Full lifecycle: validation, snapshot, optimistic update, effect, commit, rollback, retry with exponential backoff, timeout, cancellation, status tracking, and logging.
+- **Resource cache.** `mesh.resource(name, fetcher)` with request deduplication, invalidation tags, pagination, prefetch, focus/reconnect refetch, polling, LRU cache eviction, dehydration/hydration, and offline support.
+- **Mutations.** `mesh.mutation(name, mutator)` with optimistic rollback, queueing, and persistence.
+- **Persistence.** `mesh.persist(options)` with localStorage, sessionStorage, IndexedDB, and memory adapters. Version migration and TTL expiration.
+- **URL state.** `mesh.urlState(options)` with browser history adapter, custom query param names, and serialization.
+- **Forms.** `mesh.form(name, options)` with async field validation, server errors, autosave, dirty tracking, field arrays, and schema adapters.
+- **Tab sync.** `tabSyncPlugin` with BroadcastChannel and localStorage fallback.
+- **Router.** `defineRoutes` + `mesh.router(routes, options)` with nested routes, lazy loading, loaders, guards, middleware pipeline, rollback on error, keep-alive pools, predictive prefetch, route analytics, shared element transitions, and SEO meta management.
+- **Middleware.** `mesh.middleware(handler)` with Express-style `(event, mesh)` signature.
+- **Guards.** `mesh.guard(target, handler)` for protective side-effect barriers.
+- **Plugins.** `mesh.use(plugin)` with setup/cleanup lifecycle.
+- **DevTools.** Timeline component with dark theme, search, category filters, failed-only view, and export/copy.
+- **Error handling.** 16 typed error classes with cause chaining, metadata, and codes.
+- **Testing utilities.** `createTestMesh`, `createMockMesh`, `mockActions`, `assertStatePath`, `assertResourceStatus`, `waitForTransactionStatus`, and more.
+- **Undo/Redo.** `mesh.undo()` / `mesh.redo()` with configurable `maxHistory`, path-filtered tracking, batch-aware grouping, and reset-aware capture.
+- **State Time Travel.** `mesh.enableTimeTravel()` with `replayTo(index)` and `replayToTimestamp(ts)` using binary search over a bounded ring buffer.
+- **Middleware Pipelines.** `mesh.pipeline(name, stages, options)` with Express-style `next()` pattern, async stages, short-circuit, event filtering, and before/after phasing.
+- **Performance.** Path tokenization cache, stable status references, profiler hot-path filter, DevTools snapshot throttling, and shallow-equality action skip.
+- **Suspense support.** Resource reads via `React.use()` with error boundary integration.
+- **StateMesh Doctor.** Runtime diagnostics for common misconfigurations.
+
+### Performance characteristics
+
+- Subscriptions are path-scoped and equality-checked — only relevant subscribers re-render.
+- `batch(fn)` defers notification flush until the callback returns.
+- Resources deduplicate in-flight requests by key.
+- Computed values are lazily evaluated and cached until dependencies change.
+- Undo/redo and time travel are opt-in and lazy — no memory or CPU cost unless enabled.
+- Time travel uses a bounded ring buffer with configurable `maxEntries`.
+- Undo stack uses `structuredClone` snapshots with configurable `maxHistory`.
+
+### Migration
+
+This is the initial release. No migration is needed.
+
+---
+
+## Development History
+
+The following entries document the incremental development milestones that led to 1.0.0.
+
 ## 0.6.0
 
 ### Undo/Redo
