@@ -105,7 +105,7 @@ describe("mesh.computed()", () => {
     mesh.setPath("items", [4, 5, 6]); // different items, same length
     const second = mesh.getComputed("items.count");
     // The equality function should prevent recomputation from being "different"
-    expect(first.count).toBe(second.count);
+    expect((first as any).count).toBe((second as any).count);
   });
 
   it("subscribeComputed notifies on change", () => {

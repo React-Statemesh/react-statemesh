@@ -194,8 +194,8 @@ describe("cloneState", () => {
     const original = [{ id: 1 }, { id: 2 }];
     const cloned = cloneState(original);
     expect(cloned).toEqual(original);
-    cloned[0].id = 99;
-    expect(original[0].id).toBe(1);
+    cloned[0]!.id = 99;
+    expect(original[0]!.id).toBe(1);
   });
 
   it("clones Date objects with structuredClone", () => {
@@ -208,8 +208,8 @@ describe("cloneState", () => {
   it("handles nested arrays and objects", () => {
     const original = { items: [{ tags: ["a", "b"] }] };
     const cloned = cloneState(original);
-    cloned.items[0].tags.push("c");
-    expect(original.items[0].tags).toEqual(["a", "b"]);
+    cloned.items[0]!.tags.push("c");
+    expect(original.items[0]!.tags).toEqual(["a", "b"]);
   });
 
   it("clones empty object and empty array", () => {
@@ -581,7 +581,7 @@ describe("setPath", () => {
     const original = { items: [{ name: "a" }, { name: "b" }] };
     const result = setPath(original, "items.0.name", "updated");
     expect(getPath(result, "items.0.name")).toBe("updated");
-    expect(original.items[0].name).toBe("a");
+    expect(original.items[0]!.name).toBe("a");
   });
 
   it("clones array intermediates with spread", () => {
@@ -682,7 +682,7 @@ describe("applyPathMap", () => {
 describe("createSelector", () => {
   it("computes on first call", () => {
     const selector = createSelector(
-      [(state: { a: number }) => state.a],
+      [(state: unknown) => (state as { a: number }).a],
       (a) => a * 2
     );
     expect(selector({ a: 5 })).toBe(10);
@@ -691,7 +691,7 @@ describe("createSelector", () => {
   it("returns cached result when deps unchanged", () => {
     let computeCalls = 0;
     const selector = createSelector(
-      [(state: { a: number }) => state.a],
+      [(state: unknown) => (state as { a: number }).a],
       (a) => {
         computeCalls++;
         return a * 2;
@@ -706,7 +706,7 @@ describe("createSelector", () => {
   it("recomputes when a dep changes", () => {
     let computeCalls = 0;
     const selector = createSelector(
-      [(state: { a: number }) => state.a],
+      [(state: unknown) => (state as { a: number }).a],
       (a) => {
         computeCalls++;
         return a * 2;
@@ -720,7 +720,7 @@ describe("createSelector", () => {
   it("uses custom equality function", () => {
     let computeCalls = 0;
     const selector = createSelector(
-      [(state: { items: number[] }) => state.items],
+      [(state: unknown) => (state as { items: number[] }).items],
       (items) => {
         computeCalls++;
         return items.length;
@@ -748,7 +748,7 @@ describe("createSelector", () => {
 
   it("handles multiple deps", () => {
     const selector = createSelector(
-      [(state: { a: number; b: number }) => state.a, (state) => state.b],
+      [(state: unknown) => (state as { a: number; b: number }).a, (state: unknown) => (state as { b: number }).b],
       (a, b) => a + b
     );
     expect(selector({ a: 3, b: 7 })).toBe(10);
@@ -758,14 +758,14 @@ describe("createSelector", () => {
     let callsA = 0;
     let callsB = 0;
     const selA = createSelector(
-      [(state: { a: number }) => state.a],
+      [(state: unknown) => (state as { a: number }).a],
       (a) => {
         callsA++;
         return a;
       }
     );
     const selB = createSelector(
-      [(state: { a: number }) => state.a],
+      [(state: unknown) => (state as { a: number }).a],
       (a) => {
         callsB++;
         return a * 2;
@@ -779,7 +779,7 @@ describe("createSelector", () => {
 
   it("returns lastResult even if compute was never called (edge: undefined initial)", () => {
     const selector = createSelector(
-      [(state: { a?: number }) => state.a],
+      [(state: unknown) => (state as { a?: number }).a],
       (a) => a ?? "default"
     );
     expect(selector({})).toBe("default");

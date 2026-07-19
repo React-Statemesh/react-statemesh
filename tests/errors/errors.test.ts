@@ -59,7 +59,7 @@ describe("StateMeshError", () => {
   it("sets cause via defineProperty (non-writable)", () => {
     const original = new Error("original");
     const error = new StateMeshError("wrapper", { code: "X", cause: original });
-    expect(error.cause).toBe(original);
+    expect((error as any).cause).toBe(original);
     const descriptor = Object.getOwnPropertyDescriptor(error, "cause");
     expect(descriptor?.writable).toBe(false);
   });
@@ -77,7 +77,7 @@ describe("StateMeshError", () => {
 
   it("supports undefined cause", () => {
     const error = new StateMeshError("msg", { code: "X" });
-    expect(error.cause).toBeUndefined();
+    expect((error as any).cause).toBeUndefined();
   });
 });
 
@@ -108,17 +108,17 @@ const subclassTests: Array<{
 for (const { name, Class, code } of subclassTests) {
   describe(name, () => {
     it(`sets name to "${name}"`, () => {
-      const error = new Class("msg");
+      const error = new (Class as any)("msg");
       expect(error.name).toBe(name);
     });
 
     it(`has default code "${code}"`, () => {
-      const error = new Class("msg");
+      const error = new (Class as any)("msg");
       expect(error.code).toBe(code);
     });
 
     it("is instanceof StateMeshError and Error", () => {
-      const error = new Class("msg");
+      const error = new (Class as any)("msg");
       expect(error).toBeInstanceOf(StateMeshError);
       expect(error).toBeInstanceOf(Error);
     });
@@ -129,12 +129,12 @@ for (const { name, Class, code } of subclassTests) {
     });
 
     it("passes through custom metadata", () => {
-      const error = new Class("msg", { metadata: { feature: "test" } });
+      const error = new Class("msg", { metadata: { feature: "test" } } as any);
       expect(error.metadata).toEqual({ feature: "test" });
     });
 
     it("accepts optional options without throwing", () => {
-      expect(() => new Class("msg")).not.toThrow();
+      expect(() => new (Class as any)("msg")).not.toThrow();
     });
   });
 }

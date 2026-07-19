@@ -58,8 +58,8 @@ describe("Router — Route Tree", () => {
       { path: "/products/", component: undefined },
       { path: "/settings", children: [{ path: "/profile/", component: undefined }] }
     ]);
-    expect(routes[0].path).toBe("/products");
-    expect(routes[1].children?.[0].path).toBe("/profile");
+    expect(routes[0]!.path).toBe("/products");
+    expect(routes[1]!.children?.[0]!.path).toBe("/profile");
   });
 
   it("flattens nested routes into matchable entries", () => {
@@ -74,8 +74,8 @@ describe("Router — Route Tree", () => {
     ]);
     const flat = flattenRoutes(routes);
     expect(flat).toHaveLength(2);
-    expect(flat[0].fullPath).toBe("/products");
-    expect(flat[1].fullPath).toBe("/products/:id");
+    expect(flat[0]!.fullPath).toBe("/products");
+    expect(flat[1]!.fullPath).toBe("/products/:id");
   });
 
   it("matches routes and returns RouteMatch", () => {
@@ -219,8 +219,8 @@ describe("Router — defineRoutes", () => {
       { path: "/products/" },
       { path: "/" }
     ]);
-    expect(routes[0].path).toBe("/products");
-    expect(routes[1].path).toBe("/");
+    expect(routes[0]!.path).toBe("/products");
+    expect(routes[1]!.path).toBe("/");
   });
 
   it("normalizes nested paths", () => {
@@ -233,9 +233,9 @@ describe("Router — defineRoutes", () => {
         ]
       }
     ]);
-    expect(routes[0].path).toBe("/settings");
-    expect(routes[0].children?.[0].path).toBe("/profile");
-    expect(routes[0].children?.[1].path).toBe("/billing");
+    expect(routes[0]!.path).toBe("/settings");
+    expect(routes[0]!.children?.[0]!.path).toBe("/profile");
+    expect(routes[0]!.children?.[1]!.path).toBe("/billing");
   });
 });
 
@@ -305,9 +305,9 @@ describe("Router — Edge Cases", () => {
     ]);
     const flat = flattenRoutes(routes);
     expect(flat).toHaveLength(3);
-    expect(flat[0].fullPath).toBe("/a");
-    expect(flat[1].fullPath).toBe("/a/b");
-    expect(flat[2].fullPath).toBe("/a/b/c");
+    expect(flat[0]!.fullPath).toBe("/a");
+    expect(flat[1]!.fullPath).toBe("/a/b");
+    expect(flat[2]!.fullPath).toBe("/a/b/c");
   });
 
   it("flattenRoutes handles empty children", () => {
@@ -461,7 +461,7 @@ describe("updateDocumentMeta", () => {
     updateDocumentMeta({ description: "Second" });
     const metas = document.querySelectorAll('meta[name="description"]');
     expect(metas).toHaveLength(1);
-    expect(metas[0].getAttribute("content")).toBe("Second");
+    expect(metas[0]!.getAttribute("content")).toBe("Second");
   });
 
   it("handles additional custom string meta keys", () => {

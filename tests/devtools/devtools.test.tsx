@@ -188,7 +188,7 @@ describe("loggerPlugin", () => {
     mesh.use(loggerPlugin({ enabled: true, sink }));
     mesh.setPath("count", 1);
     expect(sink).toHaveBeenCalled();
-    expect(sink.mock.calls[0][0]).toBeTypeOf("string"); // label
+    expect(sink.mock.calls[0]![0]).toBeTypeOf("string"); // label
   });
 
   it("masks sensitive paths in logged events", () => {

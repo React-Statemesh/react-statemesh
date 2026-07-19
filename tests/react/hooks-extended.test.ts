@@ -332,7 +332,7 @@ describe("Mutation API (useMeshMutation equivalent)", () => {
       }
     });
     await mesh.runMutation("create-optimistic", { id: "1" });
-    expect(mesh.getState().items[0].optimistic).toBe(false);
+    expect(mesh.getState().items[0]!.optimistic).toBe(false);
   });
 });
 
@@ -397,7 +397,7 @@ describe("Router Utilities", () => {
       { path: "/products/" },
       { path: "/" }
     ]);
-    expect(routes[0].path).toBe("/products");
-    expect(routes[1].path).toBe("/");
+    expect(routes[0]!.path).toBe("/products");
+    expect(routes[1]!.path).toBe("/");
   });
 });

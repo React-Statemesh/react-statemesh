@@ -39,10 +39,10 @@ describe("Time Travel", () => {
       mesh.setPath("count", 2);
       const log = mesh.getTimeTravelLog();
       expect(log).toHaveLength(2);
-      expect(log[0].stateBefore.count).toBe(0);
-      expect(log[0].stateAfter.count).toBe(1);
-      expect(log[1].stateBefore.count).toBe(1);
-      expect(log[1].stateAfter.count).toBe(2);
+      expect(log[0]!.stateBefore.count).toBe(0);
+      expect(log[0]!.stateAfter.count).toBe(1);
+      expect(log[1]!.stateBefore.count).toBe(1);
+      expect(log[1]!.stateAfter.count).toBe(2);
     });
 
     it("does not record when disabled", () => {
@@ -68,7 +68,7 @@ describe("Time Travel", () => {
       mesh.enableTimeTravel();
       mesh.setPath("count", 1);
       const log = mesh.getTimeTravelLog();
-      const entry = log[0];
+      const entry = log[0]!;
       expect(entry.index).toBe(0);
       expect(entry.event.type).toBe("state.changed");
       expect(entry.stateBefore).toBeDefined();
@@ -83,9 +83,9 @@ describe("Time Travel", () => {
       mesh.setPath("count", 2);
       mesh.setPath("count", 3);
       const log = mesh.getTimeTravelLog();
-      expect(log[0].index).toBe(0);
-      expect(log[1].index).toBe(1);
-      expect(log[2].index).toBe(2);
+      expect(log[0]!.index).toBe(0);
+      expect(log[1]!.index).toBe(1);
+      expect(log[2]!.index).toBe(2);
     });
   });
 
@@ -161,9 +161,9 @@ describe("Time Travel", () => {
       const log = mesh.getTimeTravelLog();
       expect(log).toHaveLength(3);
       // Oldest entry (count=1) was evicted
-      expect(log[0].stateAfter.count).toBe(2);
-      expect(log[1].stateAfter.count).toBe(3);
-      expect(log[2].stateAfter.count).toBe(4);
+      expect(log[0]!.stateAfter.count).toBe(2);
+      expect(log[1]!.stateAfter.count).toBe(3);
+      expect(log[2]!.stateAfter.count).toBe(4);
     });
   });
 
