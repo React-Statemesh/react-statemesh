@@ -1,4 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
+import { useMeshComponentUsage } from "./componentTracking";
 import { useMesh } from "./useMesh";
 
 /**
@@ -19,6 +20,7 @@ export function useMeshUrlState<TValues extends Record<string, unknown> = Record
   (valueOrUpdater: Partial<TValues> | ((current: TValues) => Partial<TValues> | TValues)) => void
 ] {
   const mesh = useMesh<TState>();
+  useMeshComponentUsage({ kind: "url", name });
   const subscribe = useCallback((listener: () => void) => mesh.subscribeUrlState(name, listener), [mesh, name]);
   const getSnapshot = useCallback(() => mesh.getUrlState<TValues>(name), [mesh, name]);
   const values = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);

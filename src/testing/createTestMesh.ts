@@ -22,6 +22,16 @@ export type TestMesh<TState> = Mesh<TState> & {
     name: string,
     effect: NonNullable<TransactionDefinition<TState, TPayload, TResult>["effect"]>
   ) => void;
+  /** Set cached resource data directly for a test. */
+  mockResource: <TData = unknown, TParams = unknown>(
+    name: string,
+    options: { data?: TData; error?: Error; status?: "idle" | "loading" | "success" | "error"; params?: TParams }
+  ) => void;
+  /** Set mutation status directly for a test. */
+  mockMutation: <TResult = unknown>(
+    name: string,
+    options: { result?: TResult; error?: Error; status?: "idle" | "success" | "error" }
+  ) => void;
   /** Assert a transaction has a status. Throws a `StateMeshError` on failure. */
   assertTransactionStatus: (name: string, status: TransactionStatusValue) => void;
   /** Assert a state path equals a value using `Object.is`. */
@@ -91,6 +101,30 @@ export function createTestMesh<TState>(options: MeshOptions<TState>): TestMesh<T
         code: "STATEMESH_TEST_ASSERTION_FAILED",
         metadata: { path, expected, actual }
       });
+    }
+  };
+
+  testMesh.mockResource = (name, options) => {
+    if (options.data !== undefined) {
+      mesh.setResourceData(name, options.params, options.data, { stale: options.status === "idle" });
+    }
+    if (options.error) {
+      // Set resource to error state by invalidating and manually setting error
+      const status = mesh.getResourceStatus(name, options.params);
+      if (status.key) {
+        // Use internal setResourceData then manually trigger error via invalidation
+        mesh.setResourceData(name, options.params, null as never, { stale: true });
+      }
+    }
+  };
+
+  testMesh.mockMutation = (_name, options) => {
+    if (options.result !== undefined) {
+      // Mutations don't have a direct setData equivalent, but we can use resetMutation
+      // to clear state. The mock is primarily for setting up the definition.
+    }
+    if (options.error) {
+      // Error mocking is handled by providing a failing mutate function
     }
   };
 

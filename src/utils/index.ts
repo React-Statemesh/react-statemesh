@@ -5,3 +5,5 @@ export * from "./path";
 export * from "./debounce";
 export * from "./invariant";
 export * from "./batch";
+export * from "./selectors";
+export * from "./backoff";

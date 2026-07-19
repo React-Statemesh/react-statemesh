@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { ActionError, ComputedError, DuplicateRegistrationError, createMesh } from "../../src";
+import { afterEach, describe, expect, it } from "vitest";
+import { ActionError, ComputedError, DuplicateRegistrationError, GuardError, createMesh } from "../../src";
 
 type AppState = {
   theme: "light" | "dark";
@@ -27,6 +27,10 @@ function createAppMesh() {
     }
   });
 }
+
+afterEach(() => {
+  document.querySelectorAll("script[src*='@vite/client']").forEach((script) => script.remove());
+});
 
 describe("createMesh core store", () => {
   it("reads, writes, resets, and restores snapshots", () => {
@@ -83,6 +87,115 @@ describe("createMesh core store", () => {
     await Promise.resolve();
     expect(mesh.getState().theme).toBe("dark");
   });
+
+  it("blocks guarded operations before they mutate state", async () => {
+    const mesh = createAppMesh();
+    mesh.action("cart.addItem", (state, product: { id: string; name: string; price: number }) => {
+      state.cart.items.push({ ...product, quantity: 1 });
+    });
+    mesh.transaction("cart.checkout", {
+      optimistic(state) {
+        state.cart.status = "processing";
+      },
+      async effect() {
+        return { id: "order_1", total: 100 };
+      }
+    });
+
+    mesh.guard({ kind: "action", name: "cart.addItem" }, ({ state }) => ({
+      allow: Boolean(state.user),
+      reason: "Login required"
+    }));
+    mesh.guard(/^cart\./, ({ kind }) => kind === "transaction" ? false : true);
+
+    expect(() => mesh.runAction("cart.addItem", { id: "keyboard", name: "Keyboard", price: 100 })).toThrow(GuardError);
+    expect(mesh.getState().cart.items).toHaveLength(0);
+    expect(() => mesh.runTransaction("cart.checkout", undefined)).toThrow(GuardError);
+    expect(mesh.getState().cart.status).toBe("idle");
+
+    mesh.setPath("user", { name: "Ada" });
+    expect(() => mesh.runAction("cart.addItem", { id: "keyboard", name: "Keyboard", price: 100 })).not.toThrow();
+    expect(mesh.getState().cart.items).toHaveLength(1);
+  });
+
+  it("dehydrates and hydrates mesh state", () => {
+    const mesh = createAppMesh();
+    mesh.setPath("theme", "dark");
+    mesh.setPath("user", { name: "Ada" });
+
+    const snapshot = mesh.dehydrate({ resources: false, urlStates: false, queuedMutations: false });
+    const restored = createAppMesh();
+    restored.hydrate(snapshot);
+
+    expect(restored.getState().theme).toBe("dark");
+    expect(restored.getState().user).toEqual({ name: "Ada" });
+  });
+
+  it("records bounded profiler samples and supports filtering", () => {
+    const mesh = createMesh({
+      name: "profiled",
+      state: { count: 0 },
+      profiler: {
+        limit: 2,
+        slowThreshold: 0
+      }
+    });
+    let notifications = 0;
+    mesh.subscribeProfiler(() => {
+      notifications += 1;
+    });
+    const increment = mesh.action("counter.increment", (state) => {
+      state.count += 1;
+    });
+    mesh.computed("counter.double", {
+      deps: ["count"],
+      compute: (state) => state.count * 2
+    });
+
+    increment(undefined);
+    mesh.getComputed("counter.double");
+    increment(undefined);
+
+    const samples = mesh.getProfilerSamples();
+    expect(samples).toHaveLength(2);
+    expect(samples.every((sample) => sample.slow)).toBe(true);
+    expect(mesh.getProfilerSamples({ kinds: ["computed"] })).toHaveLength(1);
+    expect(notifications).toBeGreaterThanOrEqual(3);
+
+    mesh.clearProfilerSamples();
+    expect(mesh.getProfilerSamples()).toEqual([]);
+  });
+
+  it("reports production-readiness issues through StateMesh Doctor", () => {
+    const mesh = createMesh({
+      name: "doctor-test",
+      state: {
+        payload: "large enough"
+      },
+      profiler: {
+        slowThreshold: 0
+      }
+    });
+    mesh.resource("untagged.list", {
+      async fetch() {
+        return [];
+      }
+    });
+    const run = mesh.action("doctor.slow", () => undefined);
+    run(undefined);
+
+    const report = mesh.doctor({
+      stateSizeWarningBytes: 1,
+      slowOperationWarningMs: 0
+    });
+    const codes = report.issues.map((issue) => issue.code);
+
+    expect(report.mesh).toBe("doctor-test");
+    expect(codes).toContain("STATE_SIZE_LARGE");
+    expect(codes).toContain("RESOURCE_WITHOUT_TAGS");
+    expect(codes).toContain("OPERATION_SLOW");
+    expect(report.summary.warnings).toBeGreaterThanOrEqual(3);
+  });
 });
 
 describe("actions and computed values", () => {
@@ -133,6 +246,24 @@ describe("actions and computed values", () => {
       compute: () => 10
     }, { replace: true });
     expect(mesh.getComputed("cart.count")).toBe(10);
+  });
+
+  it("replaces duplicate registrations during Vite browser HMR", () => {
+    const script = document.createElement("script");
+    script.src = "/@vite/client";
+    document.head.appendChild(script);
+
+    const mesh = createAppMesh();
+    mesh.action("theme.set", (state) => {
+      state.theme = "light";
+    });
+
+    const forceDark = mesh.action("theme.set", (state) => {
+      state.theme = "dark";
+    });
+
+    forceDark(undefined);
+    expect(mesh.getState().theme).toBe("dark");
   });
 
   it("caches computed values until a dependency changes", () => {

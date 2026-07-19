@@ -1,408 +1,198 @@
-# StateMesh
+<p align="center">
+  <a href="https://react-statemesh.github.io/statemesh-docs">
+    <img src="logo.png" alt="StateMesh" width="120" height="120" />
+  </a>
+</p>
 
-StateMesh is a TypeScript-first, transaction-first state orchestration library for React. It starts with a small external store API, then adds the production pieces that usually become scattered across apps: named actions, optimized selectors, computed state, async transactions, optimistic UI, rollback, persistence, URL state, lightweight forms, cross-tab sync, custom errors, logger hooks, and testing helpers.
+<h1 align="center">StateMesh</h1>
+
+<p align="center">
+  <strong>Transaction-first state for React</strong>
+</p>
+
+<p align="center">
+  Every state change is a transaction. Optimistic UI, rollback, retry, undo/redo, time travel, routing, forms, persistence, cross-tab sync — all automatic. Zero dependencies. One mesh.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/react-statemesh"><img src="https://img.shields.io/npm/v/react-statemesh?style=flat-square&color=blue" alt="npm version" /></a>
+  <a href="https://bundlephobia.com/package/react-statemesh"><img src="https://img.shields.io/bundlephobia/minzip/react-statemesh?style=flat-square" alt="bundle size" /></a>
+  <a href="https://github.com/React-Statemesh/react-statemesh/blob/master/LICENSE"><img src="https://img.shields.io/npm/l/react-statemesh?style=flat-square&color=green" alt="license" /></a>
+  <a href="https://www.npmjs.com/package/react-statemesh"><img src="https://img.shields.io/npm/dm/react-statemesh?style=flat-square" alt="downloads" /></a>
+</p>
+
+---
+
+## Why StateMesh?
+
+**One store for everything.** State, server cache, forms, URL parameters, routing, cross-tab sync, undo history — all live in one store with one set of types. No more wiring together 5 libraries with different mental models.
+
+**Every state change is a transaction.** Validate, optimistic update, effect, commit, rollback — all automatic. Retry with exponential backoff, timeout, and cancellation.
+
+**Subscriptions that never waste renders.** Path-scoped selectors with equality checking. Updating `cart.items` does not rerender components reading `theme`.
+
+**Zero runtime dependencies.** React is the only peer dependency.
+
+---
+
+## Quick Start
 
 ```bash
 npm install react-statemesh
 ```
 
-## Quick Start
-
 ```tsx
-import { StateMeshProvider, createMesh, useMeshState } from "react-statemesh";
+import { createMesh, StateMeshProvider, useMeshState } from "react-statemesh";
 
 const mesh = createMesh({
-  name: "shopdesk",
-  state: {
-    theme: "light" as "light" | "dark"
-  }
+  state: { count: 0 }
 });
 
-function ThemeToggle() {
-  const [theme, setTheme] = useMeshState<"light" | "dark">("theme");
-
-  return (
-    <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
-      Current theme: {theme}
-    </button>
-  );
+function Counter() {
+  const [count, setCount] = useMeshState<number>("count");
+  return <button onClick={() => setCount(count + 1)}>Count: {count}</button>;
 }
 
 export function App() {
   return (
     <StateMeshProvider mesh={mesh}>
-      <ThemeToggle />
+      <Counter />
     </StateMeshProvider>
   );
 }
 ```
 
-The provider only passes the mesh instance through React context. State reads use `useSyncExternalStore`, so updating `theme` does not rerender unrelated consumers.
+---
 
-## Core API
+## Features
 
-```ts
-const mesh = createMesh({
-  state: {
-    cart: {
-      items: [],
-      status: "idle",
-      error: null
-    },
-    order: null
-  }
-});
+| Feature | What it does |
+|---------|-------------|
+| [**State**](https://react-statemesh.github.io/statemesh-docs/core/state) | External store with path-based subscriptions, `useSyncExternalStore` |
+| [**Actions**](https://react-statemesh.github.io/statemesh-docs/core/actions) | Named state mutations with payloads and handlers |
+| [**Selectors & Computed**](https://react-statemesh.github.io/statemesh-docs/core/selectors) | Derived state, memoization, dependency tracking |
+| [**Transactions**](https://react-statemesh.github.io/statemesh-docs/core/transactions) | Async lifecycle — validate, optimistic, effect, commit, rollback |
+| [**Undo / Redo**](https://react-statemesh.github.io/statemesh-docs/core/undo-redo) | Automatic history tracking with configurable depth |
+| [**Time Travel**](https://react-statemesh.github.io/statemesh-docs/core/time-travel) | Replay to any point in time |
+| [**Middleware Pipelines**](https://react-statemesh.github.io/statemesh-docs/core/middleware-pipelines) | Intercept, transform, log, and guard state changes |
+| [**Resources**](https://react-statemesh.github.io/statemesh-docs/data/resources) | Cached API reads with deduplication, polling, pagination |
+| [**Mutations**](https://react-statemesh.github.io/statemesh-docs/data/mutations) | Write operations with optimistic rollback and offline queue |
+| [**API Client**](https://react-statemesh.github.io/statemesh-docs/data/api-client) | Built-in HTTP client with interceptors and retry |
+| [**Persistence**](https://react-statemesh.github.io/statemesh-docs/data/persistence) | localStorage, sessionStorage, IndexedDB, cross-tab sync |
+| [**Forms**](https://react-statemesh.github.io/statemesh-docs/ui/forms) | Async validation, schema adapters, field arrays, autosave |
+| [**URL State**](https://react-statemesh.github.io/statemesh-docs/ui/url-state) | Sync state with URL search params |
+| [**Router**](https://react-statemesh.github.io/statemesh-docs/router/) | Routing IS state management — transactions, loaders, guards |
+| [**DevTools**](https://react-statemesh.github.io/statemesh-docs/advanced/devtools) | Timeline, profiler, diagnostics, state inspector |
+| [**Testing**](https://react-statemesh.github.io/statemesh-docs/testing/) | Mock helpers, assertions, async utilities |
 
-mesh.getState();
-mesh.setState({ order: null });
-mesh.setPath("cart.status", "processing");
-mesh.reset();
-mesh.destroy();
-```
+---
 
-Subscriptions can target a path or a selector:
-
-```ts
-const unsubscribe = mesh.subscribe(
-  (state) => state.cart.items.length,
-  (count) => console.log(count)
-);
-```
-
-## Actions
-
-Actions are named synchronous state changes. Handlers receive a draft copy so examples can stay natural and mutable without mutating the initial state object.
+## Example: Transaction with Optimistic UI
 
 ```ts
-mesh.action("cart.addItem", (state, product: { id: string; name: string; price: number }) => {
-  const existing = state.cart.items.find((item) => item.id === product.id);
-  if (existing) existing.quantity += 1;
-  else state.cart.items.push({ ...product, quantity: 1 });
-});
-```
-
-`mesh.action` returns a callable typed reference. You can call it directly, export it from an actions file, or pass it to `useMeshAction` so payload/result types are inferred without repeating generics.
-
-```ts
-export const addItemAction = mesh.action("cart.addItem", (state, product: Product) => {
-  state.cart.items.push({ ...product, quantity: 1 });
-});
-```
-
-```tsx
-function AddToCart({ product }: { product: Product }) {
-  const addItem = useMeshAction(addItemAction);
-  return <button onClick={() => addItem(product)}>Add</button>;
-}
-```
-
-Action failures are wrapped in `ActionError` with metadata.
-
-## Registration And Replacement
-
-Named registrations are guarded by default. Registering the same action, transaction, computed value, form, URL state, or plugin twice throws `DuplicateRegistrationError`.
-
-```ts
-mesh.action("cart.addItem", addItemHandler);
-
-// Useful in tests, story files, HMR setup code, or explicit reconfiguration.
-mesh.action("cart.addItem", mockedAddItemHandler, { replace: true });
-mesh.transaction("cart.checkout", checkoutDefinition, { replace: true });
-mesh.computed("cart.total", totalDefinition, { replace: true });
-mesh.form("profile.form", profileFormDefinition, { replace: true });
-mesh.urlState("products.filters", filterDefaults, { replace: true });
-```
-
-## Selectors And Computed State
-
-```tsx
-import { useMeshSelector, useMeshComputed } from "react-statemesh";
-
-function CartBadge() {
-  const count = useMeshSelector((state: AppState) =>
-    state.cart.items.reduce((total, item) => total + item.quantity, 0)
-  );
-  return <span>Cart: {count}</span>;
-}
-
-mesh.computed("cart.total", {
-  deps: ["cart.items"],
-  compute: (state) => state.cart.items.reduce((sum, item) => sum + item.price * item.quantity, 0)
-});
-
-function CartTotal() {
-  const total = useMeshComputed<number>("cart.total");
-  return <strong>Total: {total}</strong>;
-}
-```
-
-Computed values are cached and recompute when their dependency paths change.
-
-## Transactions
-
-Transactions own the full lifecycle: validation, snapshot, optimistic update, effect, commit, rollback, retry, timeout, cancellation, status, and logging.
-
-```ts
-export const checkoutTransaction = mesh.transaction("cart.checkout", {
-  before(state) {
-    if (state.cart.items.length === 0) throw new Error("Cart is empty");
-  },
+const checkout = mesh.transaction("cart.checkout", {
   optimistic(state) {
     state.cart.status = "processing";
-    state.cart.error = null;
   },
-  async effect(state, payload: { paymentMethodId: string }, ctx) {
-    const response = await fetch("/api/checkout", {
-      method: "POST",
-      signal: ctx.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: state.cart.items, paymentMethodId: payload.paymentMethodId })
-    });
-    if (!response.ok) throw new Error("Checkout failed");
-    return response.json() as Promise<{ id: string; total: number }>;
+  async effect(state, payload, ctx) {
+    return fetch("/api/checkout", { signal: ctx.signal });
   },
-  commit(state, order) {
-    state.order = order;
+  commit(state, result) {
+    state.order = result;
     state.cart.items = [];
-    state.cart.status = "completed";
   },
   rollback: true,
-  onError(state, error) {
-    state.cart.status = "failed";
-    state.cart.error = error.message;
-  },
-  retry: { attempts: 2, delay: 1000 },
-  timeout: 10000
+  retry: { attempts: 3, delay: backoff() }
 });
 ```
-
-Transaction registration accepts a concurrency policy:
-
-```ts
-mesh.transaction("search.products", searchDefinition, {
-  concurrency: "takeLatest"
-});
-```
-
-- `takeLatest` is the default. It aborts and rolls back the previous pending optimistic run, then starts the newest run.
-- `block` rejects a new run while the previous run is pending with `STATEMESH_TRANSACTION_BLOCKED`.
-- `queue` runs calls one after another in call order.
 
 ```tsx
 function CheckoutButton() {
-  const checkout = useMeshTransaction(checkoutTransaction);
-
+  const tx = useMeshTransaction(checkout);
   return (
-    <button disabled={checkout.pending} onClick={() => checkout.run({ paymentMethodId: "card_1" })}>
-      {checkout.pending ? "Processing..." : "Pay now"}
+    <button disabled={tx.pending} onClick={() => tx.run({ paymentMethodId: "card_1" })}>
+      {tx.pending ? "Processing..." : "Pay now"}
     </button>
   );
 }
 ```
 
-## Persistence
+---
 
-Persistence is opt-in and whitelist-first.
-
-```ts
-mesh.persist({
-  storage: "localStorage",
-  keys: ["theme", "cart.items"],
-  version: 1,
-  ttl: "7d"
-});
-```
-
-Adapters are exported from `react-statemesh/persist`:
+## Example: Router with Data Loading
 
 ```ts
-import { createMemoryStorageAdapter, persistPlugin } from "react-statemesh/persist";
-
-mesh.use(persistPlugin({
-  key: "shopdesk",
-  storage: createMemoryStorageAdapter("tests"),
-  keys: ["theme"],
-  version: 1
-}));
-```
-
-Corrupted persisted data is ignored instead of crashing the app. Version migrations and TTL expiration are supported.
-
-StateMesh only writes persistence again when one of the whitelisted paths changes, so unrelated state updates do not keep touching storage.
-
-## URL State
-
-```ts
-mesh.urlState("products.filters", {
-  search: "",
-  category: "all",
-  page: 1,
-  sort: "latest"
-});
-```
-
-```tsx
-function ProductFilters() {
-  const [filters, setFilters] = useMeshUrlState<{
-    search: string;
-    category: string;
-    page: number;
-    sort: string;
-  }>("products.filters");
-
-  return (
-    <input value={filters.search} onChange={(event) => setFilters({ search: event.target.value, page: 1 })} />
-  );
-}
-```
-
-URL state is SSR-guarded, supports push/replace mode, debounce, custom serializers, numbers, booleans, arrays, and back/forward updates.
-
-## Forms
-
-```ts
-mesh.form("profile.form", {
-  initialValues: {
-    name: "",
-    email: ""
-  },
-  validate(values) {
-    return {
-      ...(values.name ? {} : { name: "Name is required" }),
-      ...(values.email.includes("@") ? {} : { email: "Valid email is required" })
-    };
-  },
-  submit: "profile.update"
-});
-```
-
-```tsx
-function ProfileForm() {
-  const form = useMeshForm<{ name: string; email: string }>("profile.form");
-
-  return (
-    <form onSubmit={form.submit}>
-      <input {...form.field("name")} />
-      <input {...form.field("email")} />
-      <button disabled={form.submitting}>{form.submitting ? "Saving..." : "Save"}</button>
-    </form>
-  );
-}
-```
-
-Forms expose `values`, `errors`, `touched`, `dirty`, `submitting`, `submitted`, `field`, `setValue`, `setError`, `reset`, `validate`, and `submit`.
-
-## Cross-Tab Sync
-
-```ts
-import { tabSyncPlugin } from "react-statemesh/sync";
-
-mesh.use(tabSyncPlugin({
-  keys: ["theme", "cart"],
-  channel: "shopdesk-state",
-  strategy: "latest-wins"
-}));
-```
-
-StateMesh uses `BroadcastChannel` when available and falls back to `localStorage` storage events. Each message includes a source tab ID to prevent loops.
-
-## Middleware, Plugins, And Logger
-
-```ts
-mesh.middleware((event) => {
-  analytics.track(event.type);
-});
-
-mesh.use(loggerPlugin({
-  enabled: process.env.NODE_ENV === "development",
-  mask: ["user.email", "auth.token", "payment.card"]
-}));
-```
-
-Plugins have `name`, `setup`, cleanup, and event access. Duplicate plugin names are rejected.
-
-Middleware and event listeners are observational. Synchronous throws and rejected promises are isolated so analytics, logging, or devtools code cannot break state updates.
-
-## Errors
-
-StateMesh exports a predictable error hierarchy:
-
-- `StateMeshError`
-- `ProviderError`
-- `SelectorError`
-- `ComputedError`
-- `ActionError`
-- `DuplicateRegistrationError`
-- `TransactionError`
-- `TransactionRollbackError`
-- `PersistenceError`
-- `UrlStateError`
-- `FormError`
-- `SyncError`
-
-Each error includes `name`, `code`, `cause`, `metadata`, and `timestamp`.
-
-## Testing
-
-```ts
-import { createTestMesh } from "react-statemesh/testing";
-
-const mesh = createTestMesh({
-  state: {
-    cart: { items: [], status: "idle", error: null }
+const routes = defineRoutes([
+  {
+    path: "/products",
+    component: () => import("./pages/Products"),
+    loader: ({ mesh }) => mesh.resource("products.list").fetch(),
+    children: [
+      {
+        path: ":id",
+        component: () => import("./pages/ProductDetail"),
+        loader: ({ params, mesh }) => mesh.resource("product.detail").fetch({ id: params.id })
+      }
+    ]
   }
-});
-
-mesh.mockTransactionEffect("cart.checkout", async () => {
-  throw new Error("Payment failed");
-});
-
-mesh.assertTransactionStatus("cart.checkout", "error");
+]);
 ```
 
-## Package Scripts
+```tsx
+function Layout() {
+  return (
+    <div>
+      <nav>
+        <Link to="/products">Products</Link>
+      </nav>
+      <Outlet />
+    </div>
+  );
+}
+```
+
+---
+
+## Documentation
+
+Full documentation is available at **[react-statemesh.github.io/statemesh-docs](https://react-statemesh.github.io/statemesh-docs)**
+
+| Section | What's covered |
+|---------|---------------|
+| [**Guide**](https://react-statemesh.github.io/statemesh-docs/guide/) | Installation, core concepts, TypeScript |
+| [**Core**](https://react-statemesh.github.io/statemesh-docs/core/) | State, actions, selectors, transactions, undo/redo |
+| [**Data**](https://react-statemesh.github.io/statemesh-docs/data/) | Resources, mutations, API client, persistence |
+| [**UI**](https://react-statemesh.github.io/statemesh-docs/ui/) | Forms, URL state, error boundaries |
+| [**Router**](https://react-statemesh.github.io/statemesh-docs/router/) | Routes, navigation, guards, data loading, SEO |
+| [**Advanced**](https://react-statemesh.github.io/statemesh-docs/advanced/) | Middleware, guards, plugins, sync, devtools |
+| [**Testing**](https://react-statemesh.github.io/statemesh-docs/testing/) | Test helpers and patterns |
+| [**Integration**](https://react-statemesh.github.io/statemesh-docs/integration/) | Next.js, migration from other libraries |
+| [**API Reference**](https://react-statemesh.github.io/statemesh-docs/reference/errors) | Error codes, events, changelog |
+
+---
+
+## Test Coverage
+
+**603 tests** across 19 test files covering every module, API surface, error path, and edge case.
 
 ```bash
-pnpm typecheck
-pnpm test
-pnpm test:types
-pnpm build
+pnpm test           # Full suite
+pnpm test:types     # Type tests only
+pnpm test:watch     # Watch mode
 ```
 
-## Editor IntelliSense
-
-StateMesh ships production TSDoc/JSDoc comments in its generated `.d.ts` files. Editors such as VS Code show these descriptions, parameter notes, return types, and examples when developers hover imports, hooks, mesh methods, options, errors, and plugin helpers.
-
-This works for TypeScript projects automatically. Plain JavaScript React projects also get the same hover documentation when the editor can read package types from `node_modules`.
-
-## Examples
-
-TypeScript React examples:
-
-- `examples/basic-counter`
-- `examples/ecommerce-cart`
-- `examples/checkout-transaction`
-- `examples/url-filters`
-- `examples/persisted-cart`
-- `examples/tab-sync`
-- `examples/form-submit`
-- `examples/nextjs-app`
-
-Plain JavaScript React examples:
-
-- `examples-js/basic-counter`
-- `examples-js/ecommerce-cart`
-- `examples-js/checkout-transaction`
-- `examples-js/url-filters`
-- `examples-js/persisted-cart`
-- `examples-js/tab-sync`
-- `examples-js/form-submit`
-- `examples-js/nextjs-app`
+---
 
 ## Production Notes
 
-- React is a peer dependency.
-- Browser APIs are guarded for SSR and Next.js App Router usage.
-- Persistence and tab sync are explicit whitelist features.
-- Logs do not dump full state by default and can mask sensitive metadata.
-- The core has no runtime dependency on Redux, Zustand, Immer, or validation libraries.
+- **Zero runtime dependencies** — React is a peer dependency
+- **100% TypeScript** — type-safe paths, discriminated events, generic inference
+- **SSR-safe** — all browser APIs guarded, dehydrate/hydrate for server rendering
+- **Tree-shakeable** — router, devtools, and testing are separate entry points
+- **Bounded memory** — LRU caches, ring buffers, snapshot limits
+
+---
+
+## License
+
+[MIT](LICENSE)

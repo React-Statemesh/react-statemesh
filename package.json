@@ -1,7 +1,7 @@
 {
   "name": "react-statemesh",
-  "version": "0.1.0",
-  "description": "A TypeScript-first, transaction-first state orchestration library for React.",
+  "version": "1.0.0",
+  "description": "A TypeScript-first, transaction-first state orchestration library for React. Actions, computed state, async transactions, optimistic UI, rollback, persistence, URL state, forms, cross-tab sync, undo/redo, time travel, middleware pipelines, router, and testing helpers.",
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.cjs",
@@ -23,10 +23,25 @@
       "import": "./dist/sync/index.js",
       "require": "./dist/sync/index.cjs"
     },
+    "./resources": {
+      "types": "./dist/resources/index.d.ts",
+      "import": "./dist/resources/index.js",
+      "require": "./dist/resources/index.cjs"
+    },
+    "./devtools": {
+      "types": "./dist/devtools/index.d.ts",
+      "import": "./dist/devtools/index.js",
+      "require": "./dist/devtools/index.cjs"
+    },
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js",
       "require": "./dist/testing/index.cjs"
+    },
+    "./router": {
+      "types": "./dist/router/index.d.ts",
+      "import": "./dist/router/index.js",
+      "require": "./dist/router/index.cjs"
     },
     "./package.json": "./package.json"
   },
@@ -38,27 +53,64 @@
   ],
   "scripts": {
     "build": "tsup",
+    "build:clean": "tsup && find dist -name '*.map' -delete",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:types": "tsd",
     "lint": "eslint src tests",
     "bench": "tsx benchmarks/basic.ts",
-    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build && pnpm test:types"
+    "docs:dev": "npm run --prefix docs dev",
+    "docs:build": "npm run --prefix docs build",
+    "docs:preview": "npm run --prefix docs preview",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build:clean && pnpm test:types"
   },
   "keywords": [
     "react",
+    "statemesh",
+    "state-management",
     "state",
+    "store",
     "transactions",
     "optimistic-ui",
     "typescript",
     "url-state",
-    "forms"
+    "forms",
+    "middleware",
+    "undo-redo",
+    "time-travel",
+    "persistence",
+    "cross-tab-sync",
+    "router",
+    "resource-cache",
+    "api-client"
   ],
-  "author": "",
+  "author": "Aditya Prakash",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/React-Statemesh/react-statemesh.git"
+  },
+  "bugs": {
+    "url": "https://github.com/React-Statemesh/react-statemesh/issues"
+  },
+  "homepage": "https://react-statemesh.github.io/statemesh-docs/",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/React-Statemesh"
+  },
   "peerDependencies": {
-    "react": ">=18.0.0"
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react-dom": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.0",
@@ -70,6 +122,7 @@
     "eslint": "^9.29.0",
     "jsdom": "^26.1.0",
     "react": "^19.1.0",
+    "react-dom": "^19.1.0",
     "tsd": "^0.32.0",
     "tsup": "^8.5.0",
     "tsx": "^4.20.3",

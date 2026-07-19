@@ -55,7 +55,299 @@ export type MeshEvent =
   | { type: "persist.failed"; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "sync.received"; sourceTabId: string; keys: string[]; timestamp: number; metadata?: Record<string, unknown> }
   | { type: "form.changed"; name: string; field?: string; timestamp: number; metadata?: Record<string, unknown> }
-  | { type: "url.changed"; name: string; timestamp: number; metadata?: Record<string, unknown> };
+  | { type: "form.validation.started"; name: string; field?: string; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "form.validation.completed"; name: string; field?: string; valid: boolean; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "form.submit.started"; name: string; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "form.submit.succeeded"; name: string; duration: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "form.submit.failed"; name: string; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "form.autosave.started"; name: string; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "form.autosave.succeeded"; name: string; duration: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "form.autosave.failed"; name: string; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "url.changed"; name: string; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "resource.fetch.started"; name: string; key: string; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "resource.fetch.succeeded"; name: string; key: string; duration: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "resource.fetch.failed"; name: string; key: string; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "resource.invalidated"; name?: string; key?: string; tags: string[]; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "resource.hydrated"; count: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "resource.persisted"; count: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "resource.persist.failed"; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.started"; name: string; payload?: unknown; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.queued"; name: string; payload?: unknown; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.queue.restored"; count: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.queue.persisted"; count: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.queue.persist.failed"; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.queue.flushed"; count: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.optimistic"; name: string; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.succeeded"; name: string; duration: number; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.rollback"; name: string; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mutation.failed"; name: string; error: unknown; timestamp: number; metadata?: Record<string, unknown> }
+  | { type: "mesh.hydrated"; timestamp: number; metadata?: Record<string, unknown> };
+
+/** A profiler sample recorded from a named StateMesh operation. */
+export type MeshProfilerSample = {
+  /** Unique sample id. */
+  id: string;
+  /** Operation category. */
+  kind: "action" | "transaction" | "resource" | "mutation" | "form" | "computed";
+  /** Registered operation name. */
+  name: string;
+  /** Final status for the sample. */
+  status: "success" | "error" | "cancelled";
+  /** Duration in milliseconds. */
+  duration: number;
+  /** Start timestamp in milliseconds. */
+  startedAt: number;
+  /** Finish timestamp in milliseconds. */
+  finishedAt: number;
+  /** True when the sample crossed the configured slow threshold. */
+  slow: boolean;
+  /** Extra diagnostic metadata. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Filter for reading profiler samples. */
+export type MeshProfilerFilter = {
+  /** Include only these operation kinds. */
+  kinds?: readonly MeshProfilerSample["kind"][];
+  /** Include only samples at or above this duration. */
+  minDuration?: number;
+  /** Include only slow samples. */
+  slowOnly?: boolean;
+  /** Include only samples whose name or kind contains this query. */
+  query?: string;
+  /** Maximum samples returned. Defaults to all retained samples. */
+  limit?: number;
+};
+
+/** Runtime profiler configuration. */
+export type MeshProfilerOptions = {
+  /** Number of samples retained in memory. Defaults to 200. */
+  limit?: number;
+  /** Samples at or above this duration are marked slow. Defaults to 16ms. */
+  slowThreshold?: number;
+};
+
+/** Diagnostic issue returned by `mesh.doctor()`. */
+export type MeshDoctorIssue = {
+  /** Issue severity. */
+  level: "info" | "warning" | "error";
+  /** Stable machine-readable code. */
+  code: string;
+  /** Human-readable explanation. */
+  message: string;
+  /** Area that produced the issue. */
+  category: "state" | "resource" | "mutation" | "form" | "profiler" | "mesh";
+  /** Related registration name when available. */
+  name?: string;
+  /** Safe diagnostic metadata. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Options for StateMesh Doctor diagnostics. */
+export type MeshDoctorOptions = {
+  /** Warn when serialized app state is larger than this many bytes. Defaults to 250kb. */
+  stateSizeWarningBytes?: number;
+  /** Warn/error when queued mutations are older than this duration. Defaults to 5m. */
+  queuedMutationAgeWarning?: MeshDuration;
+  /** Warn when a successful resource has been stale longer than this duration. Defaults to 5m. */
+  staleResourceWarning?: MeshDuration;
+  /** Warn when profiler samples cross this duration. Defaults to the profiler slow threshold. */
+  slowOperationWarningMs?: number;
+  /** Include informational health notes. Defaults to false. */
+  includeInfo?: boolean;
+};
+
+/** Full diagnostic report returned by `mesh.doctor()`. */
+export type MeshDoctorReport = {
+  /** Mesh name. */
+  mesh: string;
+  /** Report timestamp. */
+  generatedAt: number;
+  /** Diagnostic issues. */
+  issues: MeshDoctorIssue[];
+  /** Summary counts by severity. */
+  summary: {
+    errors: number;
+    warnings: number;
+    info: number;
+  };
+};
+
+/** One StateMesh-aware usage item attached to a React component. */
+export type MeshDevtoolsComponentUsage = {
+  /** Usage category captured by StateMesh React hooks. */
+  kind: "state" | "selector" | "resource" | "mutation" | "action" | "transaction" | "form" | "url" | "computed";
+  /** Path, resource name, action name, form name, or another stable label. */
+  name: string;
+  /** Safe diagnostic details. */
+  details?: Record<string, unknown>;
+};
+
+/** Component registration accepted by StateMesh DevTools tracking. */
+export type MeshDevtoolsComponentRegistration = {
+  /** Stable component instance id. */
+  id: string;
+  /** Display component name. */
+  name: string;
+  /** Parent tracked component id. */
+  parentId?: string | null;
+};
+
+/** Component node returned by the DevTools snapshot. */
+export type MeshDevtoolsComponentNode = MeshDevtoolsComponentRegistration & {
+  /** Number of renders observed by `useMeshComponent` or `MeshComponent`. */
+  renderCount: number;
+  /** Last render timestamp. */
+  lastRenderAt: number;
+  /** StateMesh usages captured inside this component. */
+  usages: MeshDevtoolsComponentUsage[];
+};
+
+/** Options for `mesh.getDevtoolsSnapshot`. */
+export type MeshDevtoolsSnapshotOptions = {
+  /** Mask state/form/url paths such as `"auth.token"` before exposing data. */
+  mask?: readonly MeshPath[];
+  /** Maximum JSON preview bytes for large values. Defaults to 2000. */
+  previewBytes?: number;
+  /** Include full masked state. Defaults to true. */
+  state?: boolean;
+};
+
+/** Lightweight resource row used by StateMesh DevTools. */
+export type MeshDevtoolsResourceRow = Omit<ResourceStatus, "params" | "data" | "error" | "pages"> & {
+  /** Safe params preview. */
+  params: unknown;
+  /** Safe data preview. */
+  data: unknown;
+  /** Safe error preview. */
+  error: unknown;
+  /** Safe pagination page previews. */
+  pages: unknown[];
+  /** Number of active subscribers for this cache entry. */
+  subscribers: number;
+  /** Safe data preview. */
+  preview: unknown;
+};
+
+/** Lightweight mutation row used by StateMesh DevTools. */
+export type MeshDevtoolsMutationRow = Omit<MutationStatus, "data" | "error" | "lastPayload"> & {
+  /** Mutation name. */
+  name: string;
+  /** Safe result preview. */
+  data: unknown;
+  /** Safe error preview. */
+  error: unknown;
+  /** Safe last payload preview. */
+  lastPayload: unknown;
+};
+
+/** Lightweight form row used by StateMesh DevTools. */
+export type MeshDevtoolsFormRow = {
+  /** Form name. */
+  name: string;
+  /** Form values preview. */
+  values: unknown;
+  /** Current client/server merged errors. */
+  errors: Record<string, string>;
+  /** Server errors only. */
+  serverErrors: Record<string, string>;
+  /** Dirty field map. */
+  dirtyFields: Record<string, boolean>;
+  /** Touched field map. */
+  touched: Record<string, boolean>;
+  /** Submit/autosave flags. */
+  submitting: boolean;
+  autosaving: boolean;
+  /** Multi-step form position. */
+  currentStep: string | null;
+  stepIndex: number;
+};
+
+/** Complete read-only DevTools snapshot. */
+export type MeshDevtoolsSnapshot = {
+  /** Mesh name. */
+  mesh: string;
+  /** Snapshot timestamp. */
+  generatedAt: number;
+  /** Masked current state, when requested. */
+  state?: unknown;
+  /** Current resource cache rows. */
+  resources: MeshDevtoolsResourceRow[];
+  /** Current mutation statuses. */
+  mutations: MeshDevtoolsMutationRow[];
+  /** Current form summaries. */
+  forms: MeshDevtoolsFormRow[];
+  /** Current URL state values by name. */
+  urlStates: Record<string, unknown>;
+  /** Queued offline mutations. */
+  queuedMutations: QueuedMutation[];
+  /** Tracked StateMesh-aware React components. */
+  components: MeshDevtoolsComponentNode[];
+  /** Retained profiler samples. */
+  profiler: MeshProfilerSample[];
+  /** Current Doctor report. */
+  doctor: MeshDoctorReport;
+  /** Quick counts for the overview dashboard. */
+  summary: {
+    stateKeys: number;
+    resources: number;
+    resourceErrors: number;
+    staleResources: number;
+    activeMutations: number;
+    queuedMutations: number;
+    forms: number;
+    formErrors: number;
+    components: number;
+    slowOperations: number;
+    doctorErrors: number;
+    doctorWarnings: number;
+  };
+};
+
+/** Runtime operation kinds that can be guarded before execution. */
+export type MeshGuardKind = "action" | "transaction" | "mutation";
+
+/** A guard target can match by name, RegExp, or operation kind/name pair. */
+export type MeshGuardTarget = string | RegExp | {
+  /** Limit the guard to one operation kind. Omit to match all operation kinds. */
+  kind?: MeshGuardKind;
+  /** Match an operation name exactly or with a RegExp. Omit to match all names. */
+  name?: string | RegExp;
+};
+
+/** Context passed to a guard before an action, transaction, or mutation runs. */
+export type MeshGuardContext<TState = unknown, TPayload = unknown> = {
+  /** Operation kind. */
+  kind: MeshGuardKind;
+  /** Registered operation name. */
+  name: string;
+  /** Payload passed to the operation. */
+  payload: TPayload;
+  /** Current state at guard time. */
+  state: TState;
+  /** Current mesh instance. */
+  mesh: Mesh<TState>;
+};
+
+/** A guard can return false or `{ allow: false }` to block an operation. */
+export type MeshGuardResult =
+  | void
+  | boolean
+  | {
+    /** Whether the operation should run. */
+    allow: boolean;
+    /** Optional human-readable block reason. */
+    reason?: string;
+    /** Optional error to throw instead of a generated guard error. */
+    error?: Error;
+    /** Extra metadata for the generated guard error. */
+    metadata?: Record<string, unknown>;
+  };
+
+/** Guard function used by `mesh.guard`. */
+export type MeshGuard<TState = unknown, TPayload = unknown> = (
+  context: MeshGuardContext<TState, TPayload>
+) => MeshGuardResult;
 
 /**
  * Middleware observes action, transaction, persistence, sync, form, URL, and state events.
@@ -218,6 +510,10 @@ export type TransactionRetryOptions = {
   attempts: number;
   /** Delay in milliseconds or a function returning the delay for each retry. */
   delay?: number | ((attempt: number, error: Error) => number);
+  /** Wall-clock timeout in milliseconds across all retry attempts. Aborts if total elapsed time exceeds this value. */
+  totalTimeout?: number;
+  /** Called before each retry delay. Useful for logging, analytics, or user feedback. */
+  onRetry?: (attempt: number, error: Error, context: TransactionContext<unknown>) => void;
 };
 
 /** Context passed to transaction lifecycle callbacks. */
@@ -264,8 +560,8 @@ export type TransactionDefinition<TState, TPayload = void, TResult = unknown> = 
   commit?: (state: TState, result: TResult, payload: TPayload, context: TransactionContext<TState, TPayload>) => void;
   /** Use `true` to restore the snapshot, or provide custom rollback logic. */
   rollback?:
-    | boolean
-    | ((state: TState, error: Error, payload: TPayload, context: TransactionContext<TState, TPayload>) => void);
+  | boolean
+  | ((state: TState, error: Error, payload: TPayload, context: TransactionContext<TState, TPayload>) => void);
   /** Mutate state after failure, typically to set error UI. */
   onError?: (state: TState, error: Error, payload: TPayload, context: TransactionContext<TState, TPayload>) => void;
   /** Retry only the effect phase. Optimistic updates are not duplicated. */
@@ -351,6 +647,14 @@ export type UrlSerializer<TValue = unknown> = {
   serialize: (value: TValue) => string | null;
 };
 
+/** Per-field URL query parameter names, or a resolver for fully custom naming. */
+export type UrlParamNames<TValues extends Record<string, unknown> = Record<string, unknown>> =
+  | Partial<Record<keyof TValues & string, string>>
+  | ((field: keyof TValues & string, urlStateName: string) => string);
+
+/** Dynamic query params can be captured into one object field. */
+export type UrlUnknownParamCapture = boolean | RegExp | ((paramName: string) => boolean);
+
 /** Configuration for `mesh.urlState`. */
 export type UrlStateOptions<TValues extends Record<string, unknown> = Record<string, unknown>> = {
   /** Allow replacing an existing URL state registration with the same name. */
@@ -361,6 +665,12 @@ export type UrlStateOptions<TValues extends Record<string, unknown> = Record<str
   debounce?: number;
   /** Prefix query params, or use `false` to use field names directly. */
   paramPrefix?: string | false;
+  /** Custom query parameter names. Takes priority over `paramPrefix`. */
+  paramNames?: UrlParamNames<TValues>;
+  /** Capture unknown query params into an object field. */
+  captureUnknown?: UrlUnknownParamCapture;
+  /** Field that stores captured unknown params. Defaults to `"params"` when present. */
+  unknownField?: keyof TValues & string;
   /** Per-field URL serializers. */
   serializers?: Partial<{ [K in keyof TValues]: UrlSerializer<TValues[K]> }>;
 };
@@ -371,22 +681,99 @@ export type FormErrors<TValues extends Record<string, unknown>> = Partial<Record
 /** Form touched map keyed by field name. */
 export type FormTouched<TValues extends Record<string, unknown>> = Partial<Record<keyof TValues & string, boolean>>;
 
+/** Form dirty field map keyed by field name. */
+export type FormDirtyFields<TValues extends Record<string, unknown>> = Partial<Record<keyof TValues & string, boolean>>;
+
+/** Form validating field map keyed by field name. */
+export type FormValidatingFields<TValues extends Record<string, unknown>> = Partial<Record<keyof TValues & string, boolean>>;
+
+/** Field-level validator used by production forms. */
+export type FormFieldValidator<TValues extends Record<string, unknown>, K extends keyof TValues & string = keyof TValues & string> = (
+  value: TValues[K],
+  values: TValues,
+  field: K
+) => MaybePromise<string | null | undefined>;
+
+/** Map of field-level validators. Validators can be sync or async. */
+export type FormFieldValidators<TValues extends Record<string, unknown>> = Partial<{
+  [K in keyof TValues & string]: FormFieldValidator<TValues, K>;
+}>;
+
+/** Schema-like validator adapter result accepted by StateMesh forms. */
+export type FormSchemaAdapter<TValues extends Record<string, unknown>> = {
+  /** Parse or validate values and return field errors. */
+  validate: (values: TValues) => MaybePromise<FormErrors<TValues>>;
+};
+
+/** One step in a multi-step form. */
+export type FormStep<TValues extends Record<string, unknown>> = {
+  /** Stable step name. */
+  name: string;
+  /** Optional display label for app UIs. */
+  label?: string;
+  /** Fields that belong to this step. */
+  fields: readonly (keyof TValues & string)[];
+};
+
+/** Autosave configuration for a form. */
+export type FormAutosaveOptions<TValues extends Record<string, unknown>> = {
+  /** Debounce autosave by this many milliseconds. Defaults to 500. */
+  debounce?: number;
+  /** Validate before autosave. Defaults to true. */
+  validate?: boolean;
+  /** Custom autosave submitter. Defaults to the form `submit` target. */
+  submit?: FormSubmitter<TValues>;
+  /** Decide if this state should autosave. */
+  when?: (state: FormState<TValues>) => boolean;
+};
+
+/** Supported form submit target. */
+export type FormSubmitter<TValues extends Record<string, unknown>> =
+  | string
+  | TransactionHandle<TValues, unknown>
+  | MutationHandle<TValues, unknown>
+  | ((values: TValues) => MaybePromise<unknown>);
+
 /** Current form state. */
 export type FormState<TValues extends Record<string, unknown> = Record<string, unknown>> = {
   /** Current form values. */
   values: TValues;
+  /** Server or initial values used as the dirty baseline. */
+  initialValues: TValues;
   /** Field errors. */
   errors: FormErrors<TValues>;
+  /** Server-side field errors, kept separately so they can be cleared on change. */
+  serverErrors: FormErrors<TValues>;
   /** Field touched flags. */
   touched: FormTouched<TValues>;
+  /** Field dirty flags compared to `initialValues`. */
+  dirtyFields: FormDirtyFields<TValues>;
   /** True after any value changes from the initial values. */
   dirty: boolean;
+  /** True while any validation is running. */
+  validating: boolean;
+  /** Per-field validation state. */
+  validatingFields: FormValidatingFields<TValues>;
   /** True while submit is running. */
   submitting: boolean;
+  /** True while autosave is running. */
+  autosaving: boolean;
   /** True after a successful submit. */
   submitted: boolean;
   /** Last submit error. */
   submitError: Error | null;
+  /** Last autosave error. */
+  autosaveError: Error | null;
+  /** Last successful autosave timestamp. */
+  autosavedAt: number | null;
+  /** Current step name for multi-step forms. */
+  currentStep: string | null;
+  /** Current step index for multi-step forms. */
+  stepIndex: number;
+  /** Registered form steps. */
+  steps: readonly FormStep<TValues>[];
+  /** True when there are no errors and validation is not running. Derived from `errors` and `validating`. */
+  isValid: boolean;
 };
 
 /** Definition used by `mesh.form`. */
@@ -394,11 +781,27 @@ export type FormDefinition<TValues extends Record<string, unknown> = Record<stri
   /** Initial values for the form. */
   initialValues: TValues;
   /** Optional client-side validator. Return an object of field errors. */
-  validate?: (values: TValues) => FormErrors<TValues> | Promise<FormErrors<TValues>>;
-  /** Transaction name or custom submit function. */
-  submit?: string | ((values: TValues) => MaybePromise<unknown>);
+  validate?: (values: TValues) => MaybePromise<FormErrors<TValues>>;
+  /** Optional schema adapter, for libraries such as Zod, Yup, Valibot, or custom validators. */
+  schema?: FormSchemaAdapter<TValues>;
+  /** Field-level validators. Each validator can be sync or async. */
+  fields?: FormFieldValidators<TValues>;
+  /** Validate a field when it changes. Defaults to false. */
+  validateOnChange?: boolean;
+  /** Validate a field when it blurs. Defaults to true when `fields` exists. */
+  validateOnBlur?: boolean;
+  /** Clear server-side field errors when the user changes that field. Defaults to true. */
+  clearServerErrorOnChange?: boolean;
+  /** Transaction name, mutation name, transaction handle, mutation handle, or custom submit function. */
+  submit?: FormSubmitter<TValues>;
   /** Map server/transaction errors to field errors. */
   mapServerErrors?: (error: Error) => FormErrors<TValues>;
+  /** Autosave values after changes. */
+  autosave?: boolean | FormAutosaveOptions<TValues>;
+  /** Optional steps for multi-step forms. */
+  steps?: readonly FormStep<TValues>[];
+  /** Debounce delay in milliseconds for field-level validation when `validateOnChange` is true. Defaults to 0 (immediate). */
+  validateDebounce?: number;
 };
 
 /** Props returned by `form.field(name)` for spreading onto inputs. */
@@ -413,20 +816,560 @@ export type FormFieldProps<TValue = unknown> = {
   onBlur: () => void;
 };
 
+/** Props returned by `form.checkbox(name)` for checkbox inputs and toggles. */
+export type FormCheckboxProps = {
+  /** Field name. */
+  name: string;
+  /** Current checked state. */
+  checked: boolean;
+  /** Accepts a browser change event or a raw boolean. */
+  onChange: (eventOrValue: unknown) => void;
+  /** Marks the field as touched. */
+  onBlur: () => void;
+};
+
+/** Props returned by `form.radio(name, value)` for radio inputs. */
+export type FormRadioProps<TValue = unknown> = {
+  /** Field name. */
+  name: string;
+  /** Radio option value. */
+  value: TValue;
+  /** True when the form value matches this radio option. */
+  checked: boolean;
+  /** Selects this radio value. */
+  onChange: () => void;
+  /** Marks the field as touched. */
+  onBlur: () => void;
+};
+
+/** Props returned by `form.file(name)` for file inputs. */
+export type FormFileProps = {
+  /** Field name. */
+  name: string;
+  /** Accepts a browser file change event or a `File`, `FileList`, or `File[]`. */
+  onChange: (eventOrValue: unknown) => void;
+  /** Marks the field as touched. */
+  onBlur: () => void;
+};
+
+/** Props returned by `form.select(name)` for select inputs. */
+export type FormSelectProps<TValue = unknown> = FormFieldProps<TValue>;
+
 /** Runtime form API returned by `mesh.getForm` and `useMeshForm`. */
 export type FormApi<TValues extends Record<string, unknown> = Record<string, unknown>> = FormState<TValues> & {
   /** Return input props for one field. */
   field: <K extends keyof TValues & string>(name: K) => FormFieldProps<TValues[K]>;
+  /** Return checkbox props for a boolean field. */
+  checkbox: <K extends keyof TValues & string>(name: K) => FormCheckboxProps;
+  /** Return radio props for one option of a field. */
+  radio: <K extends keyof TValues & string>(name: K, value: TValues[K]) => FormRadioProps<TValues[K]>;
+  /** Return file input props for a file field. */
+  file: <K extends keyof TValues & string>(name: K) => FormFileProps;
+  /** Return select props for one field. */
+  select: <K extends keyof TValues & string>(name: K) => FormSelectProps<TValues[K]>;
   /** Set one field value and mark the form dirty. */
   setValue: <K extends keyof TValues & string>(name: K, value: TValues[K]) => void;
+  /** Return helpers for an array field. */
+  fieldArray: <K extends keyof TValues & string>(name: K) => FormFieldArrayApi<TValues, K>;
   /** Set or clear one field error. */
   setError: <K extends keyof TValues & string>(name: K, error: string | null) => void;
-  /** Reset values, errors, touched state, and submit metadata. */
-  reset: () => void;
+  /** Set or replace server errors. */
+  setServerErrors: (errors: FormErrors<TValues>) => void;
+  /** Reset values, errors, touched state, and submit metadata. Optionally replace the dirty baseline. */
+  reset: (values?: TValues) => void;
+  /** Reset to server data and use it as the new dirty baseline. */
+  resetToServer: (values: TValues) => void;
   /** Run validation and update `errors`. */
   validate: () => Promise<FormErrors<TValues>>;
+  /** Validate one field and update its error. */
+  validateField: <K extends keyof TValues & string>(name: K) => Promise<string | null>;
+  /** Validate the current step. */
+  validateStep: () => Promise<FormErrors<TValues>>;
   /** Submit through the configured transaction or submit function. */
   submit: (event?: { preventDefault?: () => void }) => Promise<void>;
+  /** Trigger autosave immediately when autosave is configured. */
+  autosaveNow: () => Promise<void>;
+  /** Move to the next step after validating the current step. */
+  nextStep: () => Promise<boolean>;
+  /** Move to the previous step. */
+  previousStep: () => void;
+  /** Move to a step by name or index. */
+  goToStep: (step: string | number) => Promise<boolean>;
+};
+
+/** Helpers for dynamic array fields such as invoice items or multiple addresses. */
+export type FormFieldArrayApi<
+  TValues extends Record<string, unknown>,
+  K extends keyof TValues & string
+> = {
+  /** Field name. */
+  name: K;
+  /** Current array items. */
+  items: TValues[K] extends Array<infer TItem> ? TItem[] : unknown[];
+  /** Append one item. */
+  append: (item: TValues[K] extends Array<infer TItem> ? TItem : unknown) => void;
+  /** Insert one item at an index. */
+  insert: (index: number, item: TValues[K] extends Array<infer TItem> ? TItem : unknown) => void;
+  /** Update one item at an index. */
+  update: (index: number, item: TValues[K] extends Array<infer TItem> ? TItem : unknown) => void;
+  /** Remove one item by index. */
+  remove: (index: number) => void;
+  /** Move one item from one index to another. */
+  move: (from: number, to: number) => void;
+  /** Replace the whole array. */
+  replace: (items: TValues[K] extends Array<infer TItem> ? TItem[] : unknown[]) => void;
+};
+
+/** Duration accepted by resource/cache APIs. */
+export type MeshDuration = number | `${number}${"ms" | "s" | "m" | "h" | "d"}`;
+
+/** A cache tag used for resource invalidation. */
+export type ResourceTag = string | { type: string; id?: string | number };
+
+/** A stable resource key, similar to query keys in server-state libraries. */
+export type ResourceKey = string | readonly unknown[] | Record<string, unknown>;
+
+/** Resource lifecycle status. */
+export type ResourceStatusValue = "idle" | "loading" | "success" | "error";
+
+/** Context passed to resource fetchers. */
+export type ResourceFetchContext<TState, TParams = void, TPageParam = unknown> = {
+  /** Registered resource name. */
+  name: string;
+  /** Stable cache key for this resource/params pair. */
+  key: string;
+  /** Params passed to `fetchResource` or `useMeshResource`. */
+  params: TParams;
+  /** Abort signal for the current fetch. */
+  signal: AbortSignal;
+  /** Current mesh instance. */
+  mesh: Mesh<TState>;
+  /** Page param for pagination/infinite resources. */
+  pageParam?: TPageParam;
+  /** Zero-based page index for paginated fetches. */
+  pageIndex: number;
+  /** Extra metadata emitted with resource events. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Defines cached API/server data owned by the mesh. */
+export type ResourceDefinition<TState, TParams = void, TData = unknown, TPageParam = unknown> = {
+  /** Return a stable cache key from params. Defaults to the params value. */
+  key?: (params: TParams) => ResourceKey;
+  /** Fetch resource data. Requests for the same key are deduped by default. */
+  fetch: (params: TParams, context: ResourceFetchContext<TState, TParams, TPageParam>) => MaybePromise<TData>;
+  /** Tags attached to successful data for later invalidation. */
+  tags?: readonly ResourceTag[] | ((data: TData | null, params: TParams) => readonly ResourceTag[]);
+  /** How long successful data stays fresh. Defaults to 0ms. */
+  staleTime?: MeshDuration;
+  /** How long cached data is retained after writes. Use `false` to keep forever. Defaults to 5m. */
+  cacheTime?: MeshDuration | false;
+  /** Reuse an in-flight request for the same key. Defaults to true. */
+  dedupe?: boolean;
+  /** Keep previous data visible while refetching. Defaults to true. */
+  keepPreviousData?: boolean;
+  /** Optional initial data for the first read. */
+  initialData?: TData | ((params: TParams) => TData);
+  /** Return the next page param for pagination/infinite resources. */
+  getNextPageParam?: (lastPage: TData, pages: TData[], params: TParams) => TPageParam | null | undefined;
+  /** Merge fetched pages into the public `data` value. Defaults to the latest page. */
+  mergePages?: (pages: TData[], params: TParams) => TData;
+  /** Maximum number of cache entries for this resource. Oldest entries with no active
+   *  subscribers are evicted when this limit is reached. Defaults to `Infinity`. */
+  maxCacheEntries?: number;
+  /** Enable or disable automatic fetching. Defaults to `true`. When false, the resource will not fetch until enabled. */
+  enabled?: boolean | ((params: TParams, state: TState) => boolean);
+  /** Transform the raw fetched data before caching. The transformed value is returned to consumers but the original is cached. */
+  select?: (data: TData, params: TParams) => TData;
+  /** Called after a successful fetch. */
+  onSuccess?: (data: TData, params: TParams) => void;
+  /** Called after a failed fetch. */
+  onError?: (error: Error, params: TParams) => void;
+};
+
+/** Runtime status for one resource cache entry. */
+export type ResourceStatus<TData = unknown, TParams = unknown> = {
+  /** Registered resource name. */
+  name: string;
+  /** Stable cache key. */
+  key: string;
+  /** Params for this cache entry. */
+  params: TParams;
+  /** Current lifecycle state. */
+  status: ResourceStatusValue;
+  /** True when the first load is pending. */
+  pending: boolean;
+  /** True whenever a fetch is in flight, including background refetches. */
+  fetching: boolean;
+  /** True when the entry should be refetched before use. */
+  stale: boolean;
+  /** Last successful data. */
+  data: TData | null;
+  /** Last error, if the fetch failed. */
+  error: Error | null;
+  /** Normalized invalidation tags. */
+  tags: string[];
+  /** Fetched pages for pagination/infinite resources. */
+  pages: TData[];
+  /** Page params used for pagination/infinite resources. */
+  pageParams: unknown[];
+  /** True when `fetchNextPage` can request another page. */
+  hasNextPage: boolean;
+  /** Start timestamp for the current/last fetch. */
+  startedAt: number | null;
+  /** Finish timestamp for the last fetch. */
+  finishedAt: number | null;
+  /** Duration in milliseconds for the last fetch. */
+  duration: number | null;
+  /** Timestamp of the last successful data write. */
+  updatedAt: number | null;
+};
+
+/** Options for fetching a resource. */
+export type ResourceFetchOptions = {
+  /** Ignore fresh cached data and fetch again. */
+  force?: boolean;
+  /** Keep current status data while refetching. */
+  background?: boolean;
+  /** Page param for pagination/infinite resources. */
+  pageParam?: unknown;
+  /** Append the fetched page to existing pages. */
+  append?: boolean;
+  /** Extra metadata emitted with resource events. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Options for subscribing to a resource entry. */
+export type ResourceSubscribeOptions = {
+  /** Params for the resource entry. */
+  params?: unknown;
+};
+
+/** Invalidation filter for resources. */
+export type ResourceInvalidation =
+  | readonly ResourceTag[]
+  | {
+    /** Resource names to invalidate. */
+    names?: readonly string[];
+    /** Tags to invalidate. */
+    tags?: readonly ResourceTag[];
+    /** Custom cache entry predicate. */
+    predicate?: (status: ResourceStatus) => boolean;
+    /** Refetch invalidated resources. `active` only refetches entries with subscribers. */
+    refetch?: boolean | "active";
+    /** Extra metadata emitted with invalidation events. */
+    metadata?: Record<string, unknown>;
+  };
+
+/** Options for writing cached resource data manually. */
+export type ResourceSetDataOptions = {
+  /** Attach or replace invalidation tags. */
+  tags?: readonly ResourceTag[];
+  /** Mark the entry stale after writing. Defaults to false. */
+  stale?: boolean;
+  /** Extra metadata emitted with resource events. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Serializable resource cache entry used for SSR hydration and cache persistence. */
+export type ResourceSnapshotEntry = {
+  /** Registered resource name. */
+  name: string;
+  /** Stable cache key. */
+  key: string;
+  /** Params used to create the cache key. */
+  params: unknown;
+  /** Last successful data. */
+  data: unknown;
+  /** Normalized tags attached to this entry. */
+  tags: string[];
+  /** Pagination pages. */
+  pages: unknown[];
+  /** Pagination page params. */
+  pageParams: unknown[];
+  /** Whether the entry should refetch before use. */
+  stale: boolean;
+  /** Last data write timestamp. */
+  updatedAt: number | null;
+  /** Last fetch finish timestamp. */
+  finishedAt: number | null;
+};
+
+/** Serializable resource cache snapshot. */
+export type ResourceSnapshot = {
+  /** Snapshot schema version. */
+  version: number;
+  /** Snapshot creation time. */
+  createdAt: number;
+  /** Dehydrated resource cache entries. */
+  entries: ResourceSnapshotEntry[];
+};
+
+/** Options for resource cache dehydration. */
+export type ResourceDehydrateOptions = {
+  /** Include only these resource names. */
+  names?: readonly string[];
+  /** Include entries with matching tags. */
+  tags?: readonly ResourceTag[];
+  /** Custom filter. */
+  predicate?: (status: ResourceStatus) => boolean;
+};
+
+/** Options for hydrating resource cache snapshots. */
+export type ResourceHydrateOptions = {
+  /** Mark hydrated entries stale so the UI can show data and refetch. Defaults to false. */
+  stale?: boolean;
+  /** Skip entries whose resources have not been registered. Defaults to true. */
+  skipMissing?: boolean;
+  /** Extra metadata emitted with hydration events. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Persistence options for the resource cache. */
+export type ResourcePersistOptions = ResourceDehydrateOptions & {
+  /** Storage key. Defaults to `${mesh.name}:resources`. */
+  key?: string;
+  /** Built-in storage name or a custom adapter. */
+  storage?: PersistStorageName | StorageAdapter;
+  /** Persisted schema version. */
+  version?: number;
+  /** Expire persisted resource cache after a duration. */
+  ttl?: MeshDuration;
+  /** Migrate a persisted resource snapshot when versions change. */
+  migrate?: (snapshot: ResourceSnapshot, fromVersion: number) => ResourceSnapshot;
+  /** Serialize the persistence envelope. Defaults to `JSON.stringify`. */
+  serializer?: (value: unknown) => string;
+  /** Deserialize the persistence envelope. Defaults to `JSON.parse`. */
+  deserializer?: (value: string) => unknown;
+  /** Throttle writes in milliseconds. */
+  throttle?: number;
+  /** Called when restore/save fails. */
+  onError?: (error: Error) => void;
+  /** Extra metadata emitted with persistence events. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Serializable full mesh snapshot for SSR, tests, app restore, or migrations. */
+export type MeshDehydratedSnapshot = {
+  /** Snapshot schema version. */
+  version: number;
+  /** Mesh name at snapshot time. */
+  name: string;
+  /** Snapshot creation timestamp. */
+  createdAt: number;
+  /** Cloned app state. */
+  state?: unknown;
+  /** Dehydrated resource cache. */
+  resources?: ResourceSnapshot;
+  /** Registered URL state values by name. */
+  urlStates?: Record<string, unknown>;
+  /** Registered form values by name. */
+  forms?: Record<string, unknown>;
+  /** Offline queued mutations. */
+  queuedMutations?: QueuedMutation[];
+};
+
+/** Options for `mesh.dehydrate`. */
+export type MeshDehydrateOptions = ResourceDehydrateOptions & {
+  /** Include app state. Defaults to true. */
+  state?: boolean;
+  /** Include resource cache. Defaults to true. */
+  resources?: boolean;
+  /** Include URL state values. Defaults to true. */
+  urlStates?: boolean;
+  /** Include form values. Defaults to false. */
+  forms?: boolean;
+  /** Include queued offline mutations. Defaults to true. */
+  queuedMutations?: boolean;
+};
+
+/** Options for `mesh.hydrate`. */
+export type MeshHydrateOptions = ResourceHydrateOptions & {
+  /** Hydrate app state. Defaults to true. */
+  state?: boolean;
+  /** Shallow-merge state instead of replacing it. Defaults to false. */
+  mergeState?: boolean;
+  /** Hydrate resource cache. Defaults to true. */
+  resources?: boolean;
+  /** Hydrate registered URL states. Defaults to true. */
+  urlStates?: boolean;
+  /** Hydrate registered forms. Defaults to false. */
+  forms?: boolean;
+  /** Hydrate queued offline mutations. Defaults to true. */
+  queuedMutations?: boolean;
+  /** Extra metadata emitted with hydration events. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Persistence options for the offline mutation queue. */
+export type MutationQueuePersistOptions = {
+  /** Storage key. Defaults to `${mesh.name}:mutation-queue`. */
+  key?: string;
+  /** Built-in storage name or a custom adapter. */
+  storage?: PersistStorageName | StorageAdapter;
+  /** Persisted schema version. */
+  version?: number;
+  /** Expire persisted queue after a duration. */
+  ttl?: MeshDuration;
+  /** Serialize the persistence envelope. Defaults to `JSON.stringify`. */
+  serializer?: (value: unknown) => string;
+  /** Deserialize the persistence envelope. Defaults to `JSON.parse`. */
+  deserializer?: (value: string) => unknown;
+  /** Throttle writes in milliseconds. */
+  throttle?: number;
+  /** Called when restore/save fails. */
+  onError?: (error: Error) => void;
+  /** Extra metadata emitted with queue persistence events. */
+  metadata?: Record<string, unknown>;
+};
+
+/** Normalized entity collection used by `mesh.normalizeEntities`. */
+export type EntityCollection<TEntity, TId extends string | number = string | number> = {
+  /** Entity records by id. */
+  byId: Record<string, TEntity>;
+  /** Stable id order. */
+  allIds: TId[];
+};
+
+/** Entity id selector or field name. */
+export type EntityIdSelector<TEntity, TId extends string | number = string | number> =
+  | keyof TEntity & string
+  | ((entity: TEntity) => TId);
+
+/** Handle returned by `mesh.resource`. */
+export type ResourceHandle<TParams = void, TData = unknown> = {
+  /** Registered resource name. */
+  readonly resourceName: string;
+  /** Internal marker for typed StateMesh references. */
+  readonly kind: "statemesh.resource";
+  /** Fetch data for this resource. */
+  fetch: (params?: TParams, options?: ResourceFetchOptions) => Promise<TData>;
+  /** Fetch without forcing a network call when cached data is fresh. */
+  preload: (params?: TParams, options?: ResourceFetchOptions) => Promise<TData>;
+  /** Alias for `preload`, named for common React data-loading vocabulary. */
+  prefetch: (params?: TParams, options?: ResourceFetchOptions) => Promise<TData>;
+  /** Fetch the next page for pagination/infinite resources. */
+  fetchNextPage: (params?: TParams, options?: ResourceFetchOptions) => Promise<TData>;
+  /** Read the current status for a params entry. */
+  get: (params?: TParams) => ResourceStatus<TData, TParams>;
+  /** Write cached data manually. */
+  setData: (params: TParams | undefined, updater: TData | ((current: TData | null) => TData), options?: ResourceSetDataOptions) => void;
+  /** Mark this resource stale, optionally refetching it. */
+  invalidate: (invalidation?: ResourceInvalidation) => Promise<void>;
+  /** Subscribe to one params entry. */
+  subscribe: (listener: () => void, params?: TParams) => Unsubscribe;
+  /** Cancel an in-flight fetch for this resource. */
+  cancel: (params?: TParams) => void;
+};
+
+/** Mutation lifecycle status. */
+export type MutationStatusValue = "idle" | "pending" | "queued" | "success" | "error";
+
+/** Runtime status for one mutation. */
+export type MutationStatus<TResult = unknown> = {
+  /** Current lifecycle state. */
+  status: MutationStatusValue;
+  /** True while the mutation is running. */
+  pending: boolean;
+  /** True while the latest mutation payload is queued for reconnect. */
+  queued: boolean;
+  /** True after a successful mutation. */
+  success: boolean;
+  /** Last successful result. */
+  data: TResult | null;
+  /** Last error, if the mutation failed. */
+  error: Error | null;
+  /** Last payload passed to the mutation. */
+  lastPayload: unknown;
+  /** Start timestamp in milliseconds. */
+  startedAt: number | null;
+  /** Finish timestamp in milliseconds. */
+  finishedAt: number | null;
+  /** Duration in milliseconds. */
+  duration: number | null;
+  /** Number of runs attempted. */
+  runs: number;
+  /** Number of queued payloads for this mutation. */
+  queueSize: number;
+};
+
+/** Offline queue configuration for a mutation. */
+export type MutationOfflineOptions = {
+  /** Queue the mutation when `navigator.onLine === false`. Defaults to true. */
+  queue?: boolean;
+  /** Flush queued mutations when the browser comes back online. Defaults to true. */
+  flushOnReconnect?: boolean;
+};
+
+/** One queued offline mutation payload. */
+export type QueuedMutation<TPayload = unknown> = {
+  /** Unique queue item id. */
+  id: string;
+  /** Registered mutation name. */
+  name: string;
+  /** Payload that will be passed to the mutation. */
+  payload: TPayload;
+  /** Queue timestamp. */
+  queuedAt: number;
+};
+
+/** Context passed to mutation callbacks. */
+export type MutationContext<TState, TPayload = void> = {
+  /** Registered mutation name. */
+  name: string;
+  /** Payload passed to `run`. */
+  payload: TPayload;
+  /** Abort signal for the current run. */
+  signal: AbortSignal;
+  /** Current mesh instance. */
+  mesh: Mesh<TState>;
+  /** Read cached resource data. */
+  getResourceData: <TData = unknown, TParams = unknown>(resource: string | ResourceHandle<TParams, TData>, params?: TParams) => TData | null;
+  /** Write cached resource data. */
+  setResourceData: <TData = unknown, TParams = unknown>(
+    resource: string | ResourceHandle<TParams, TData>,
+    params: TParams | undefined,
+    updater: TData | ((current: TData | null) => TData),
+    options?: ResourceSetDataOptions
+  ) => void;
+  /** Invalidate resources from inside the mutation. */
+  invalidate: (invalidation?: ResourceInvalidation) => Promise<void>;
+};
+
+/** Defines an API/server mutation with optimistic update, rollback, invalidation, and refetch. */
+export type MutationDefinition<TState, TPayload = void, TResult = unknown> = {
+  /** Mutate remote/API data. */
+  mutate: (payload: TPayload, context: MutationContext<TState, TPayload>) => MaybePromise<TResult>;
+  /** Optimistically update mesh state and/or resource cache before the API call finishes. */
+  optimistic?: (state: TState, payload: TPayload, context: MutationContext<TState, TPayload>) => MaybePromise<void>;
+  /** Commit successful mutation data into mesh state. */
+  commit?: (state: TState, result: TResult, payload: TPayload, context: MutationContext<TState, TPayload>) => MaybePromise<void>;
+  /** Restore pre-mutation state/cache on failure. Defaults to true when `optimistic` is defined. */
+  rollback?: boolean | ((state: TState, error: Error, payload: TPayload, context: MutationContext<TState, TPayload>) => MaybePromise<void>);
+  /** Called after success. */
+  onSuccess?: (result: TResult, payload: TPayload, context: MutationContext<TState, TPayload>) => MaybePromise<void>;
+  /** Called after failure. */
+  onError?: (error: Error, payload: TPayload, context: MutationContext<TState, TPayload>) => MaybePromise<void>;
+  /** Tags to invalidate after success. */
+  invalidate?: readonly ResourceTag[] | ((result: TResult, payload: TPayload) => readonly ResourceTag[]);
+  /** Refetch invalidated resources after success. Defaults to `active`. */
+  refetch?: boolean | "active";
+  /** How to handle overlapping runs of the same mutation. Defaults to `block`. */
+  concurrency?: TransactionConcurrencyPolicy;
+  /** Queue this mutation while offline and replay it on reconnect. */
+  offline?: boolean | MutationOfflineOptions;
+};
+
+/** Handle returned by `mesh.mutation`. */
+export type MutationHandle<TPayload = void, TResult = unknown> = MutationStatus<TResult> & {
+  /** Registered mutation name. */
+  readonly mutationName: string;
+  /** Internal marker for typed StateMesh references. */
+  readonly kind: "statemesh.mutation";
+  /** Run the mutation. */
+  run: (payload: TPayload) => Promise<TResult>;
+  /** Reset mutation status to idle. */
+  reset: () => void;
 };
 
 /** Options for manual subscriptions. */
@@ -435,6 +1378,69 @@ export type MeshSubscriptionOptions<TSelected> = {
   equality?: EqualityFn<TSelected>;
   /** Call the listener immediately with the current value. */
   fireImmediately?: boolean;
+};
+
+/** Options for undo/redo. */
+export type MeshUndoOptions = {
+  /** Maximum number of undo entries retained. Oldest entries are evicted first. Defaults to 50. */
+  maxHistory?: number;
+  /** Only track these state paths for undo/redo. When omitted, the full state is tracked. */
+  paths?: readonly string[];
+};
+
+/** Options for time travel / state replay. */
+export type MeshTimeTravelOptions = {
+  /** Maximum number of time travel entries retained in the ring buffer. Defaults to 1000. */
+  maxEntries?: number;
+};
+
+/** One entry in the time travel log. */
+export type TimeTravelEntry<TState = unknown> = {
+  /** Sequential entry index. */
+  index: number;
+  /** The event that caused this state change. */
+  event: MeshEvent;
+  /** Deep clone of state before the change. */
+  stateBefore: TState;
+  /** Deep clone of state after the change. */
+  stateAfter: TState;
+  /** Entry timestamp. */
+  timestamp: number;
+};
+
+/** Context passed to each middleware pipeline stage. */
+export type PipelineContext<TState = unknown> = {
+  /** The event being processed. */
+  event: MeshEvent;
+  /** Current mesh instance. */
+  mesh: Mesh<TState>;
+  /** Current state at the time of pipeline execution. */
+  state: TState;
+  /** Zero-based stage index within the pipeline. */
+  stageIndex: number;
+  /** Registered name of the current stage. */
+  stageName: string;
+};
+
+/** One stage in a middleware pipeline. */
+export type PipelineStage<TState = unknown> = {
+  /** Unique stage name within the pipeline. */
+  name: string;
+  /** Handler that processes the event. Call `next()` to continue to the next stage. Return without calling `next()` to short-circuit. */
+  handler: (context: PipelineContext<TState>, next: () => Promise<void>) => MaybePromise<void>;
+};
+
+/** Options for a middleware pipeline. */
+export type PipelineOptions = {
+  /** Only run the pipeline for events matching this filter. */
+  filter?: {
+    /** Match event type exactly or with a RegExp. */
+    type?: string | RegExp;
+    /** Match event name field exactly or with a RegExp. */
+    name?: string | RegExp;
+  };
+  /** When to run the pipeline relative to existing middleware. Defaults to "before". */
+  phase?: "before" | "after";
 };
 
 /** Options for creating a mesh. */
@@ -447,6 +1453,12 @@ export type MeshOptions<TState> = {
   devtools?: boolean;
   /** Reserved logger flag for future integrations. */
   logger?: boolean;
+  /** Runtime profiler options. */
+  profiler?: MeshProfilerOptions;
+  /** Undo/redo options. When provided, the mesh tracks state history for undo/redo operations. */
+  undo?: MeshUndoOptions;
+  /** Time travel options. When provided, the mesh can record and replay state changes. */
+  timeTravel?: MeshTimeTravelOptions;
 };
 
 /**
@@ -506,6 +1518,111 @@ export type Mesh<TState = unknown> = {
   resetTransaction: (name: string) => void;
   /** Retry one transaction with its previous payload. */
   retryTransaction: <TResult = unknown>(name: string) => Promise<TResult>;
+  /** Register cached API/server data. */
+  resource: <TParams = void, TData = unknown, TPageParam = unknown>(
+    name: string,
+    definition: ResourceDefinition<TState, TParams, TData, TPageParam>,
+    options?: MeshRegistryOptions
+  ) => ResourceHandle<TParams, TData>;
+  /** Fetch a registered resource by name. */
+  fetchResource: <TParams = void, TData = unknown>(
+    name: string,
+    params?: TParams,
+    options?: ResourceFetchOptions
+  ) => Promise<TData>;
+  /** Alias for `fetchResource` with `force: false`, intended for route/link prefetching. */
+  prefetchResource: <TParams = void, TData = unknown>(
+    name: string,
+    params?: TParams,
+    options?: ResourceFetchOptions
+  ) => Promise<TData>;
+  /** Fetch the next page for a registered pagination/infinite resource. */
+  fetchNextResourcePage: <TParams = void, TData = unknown>(
+    name: string,
+    params?: TParams,
+    options?: ResourceFetchOptions
+  ) => Promise<TData>;
+  /** Read current resource status by name and params. */
+  getResourceStatus: <TData = unknown, TParams = unknown>(name: string, params?: TParams) => ResourceStatus<TData, TParams>;
+  /** Write resource cache data manually. */
+  setResourceData: <TData = unknown, TParams = unknown>(
+    name: string,
+    params: TParams | undefined,
+    updater: TData | ((current: TData | null) => TData),
+    options?: ResourceSetDataOptions
+  ) => void;
+  /** Mark resources stale by name, tag, or predicate, optionally refetching. */
+  invalidateResources: (invalidation?: ResourceInvalidation) => Promise<void>;
+  /** Subscribe to one resource cache entry. */
+  subscribeResource: (name: string, listener: () => void, options?: ResourceSubscribeOptions) => Unsubscribe;
+  /** Serialize resource cache entries for SSR hydration or persistence. */
+  dehydrateResources: (options?: ResourceDehydrateOptions) => ResourceSnapshot;
+  /** Restore resource cache entries from a snapshot. */
+  hydrateResources: (snapshot: ResourceSnapshot, options?: ResourceHydrateOptions) => void;
+  /** Persist selected resource cache entries to storage. */
+  persistResources: (options?: ResourcePersistOptions) => Unsubscribe;
+  /** Serialize state, resources, URL state, forms, and queued mutations. */
+  dehydrate: (options?: MeshDehydrateOptions) => MeshDehydratedSnapshot;
+  /** Restore a full mesh snapshot. */
+  hydrate: (snapshot: MeshDehydratedSnapshot, options?: MeshHydrateOptions) => void;
+  /** Register an API/server mutation. */
+  mutation: <TPayload = void, TResult = unknown>(
+    name: string,
+    definition: MutationDefinition<TState, TPayload, TResult>,
+    options?: MeshRegistryOptions
+  ) => MutationHandle<TPayload, TResult>;
+  /** Run a registered mutation by name. */
+  runMutation: <TPayload = void, TResult = unknown>(name: string, payload: TPayload) => Promise<TResult>;
+  /** Read current mutation status. */
+  getMutationStatus: <TResult = unknown>(name: string) => MutationStatus<TResult>;
+  /** Subscribe to mutation status changes. */
+  subscribeMutation: (name: string, listener: () => void) => Unsubscribe;
+  /** Reset mutation status to idle. */
+  resetMutation: (name: string) => void;
+  /** Inspect queued offline mutations. */
+  getQueuedMutations: () => QueuedMutation[];
+  /** Flush queued offline mutations immediately. */
+  runQueuedMutations: () => Promise<void>;
+  /** Clear queued offline mutations. */
+  clearQueuedMutations: (error?: Error) => void;
+  /** Persist and restore the offline mutation queue. */
+  persistQueuedMutations: (options?: MutationQueuePersistOptions) => Unsubscribe;
+  /** Run StateMesh Doctor diagnostics for common production-readiness issues. */
+  doctor: (options?: MeshDoctorOptions) => MeshDoctorReport;
+  /** Read retained performance profiler samples. */
+  getProfilerSamples: (filter?: MeshProfilerFilter) => MeshProfilerSample[];
+  /** Clear retained performance profiler samples. */
+  clearProfilerSamples: () => void;
+  /** Subscribe to profiler sample changes. */
+  subscribeProfiler: (listener: () => void) => Unsubscribe;
+  /** Read a masked snapshot for DevTools panels and debug reports. */
+  getDevtoolsSnapshot: (options?: MeshDevtoolsSnapshotOptions) => MeshDevtoolsSnapshot;
+  /** Subscribe to DevTools snapshot changes. */
+  subscribeDevtools: (listener: () => void) => Unsubscribe;
+  /** Register one StateMesh-aware React component instance for DevTools. */
+  registerDevtoolsComponent: (component: MeshDevtoolsComponentRegistration) => Unsubscribe;
+  /** Record one StateMesh hook/resource/action usage for a tracked component. */
+  recordDevtoolsComponentUsage: (componentId: string, usage: MeshDevtoolsComponentUsage) => void;
+  /** Normalize entities into `{ byId, allIds }`. */
+  normalizeEntities: <TEntity, TId extends string | number = string | number>(
+    entities: readonly TEntity[],
+    selectId: EntityIdSelector<TEntity, TId>
+  ) => EntityCollection<TEntity, TId>;
+  /** Merge entities into an existing normalized collection. */
+  mergeEntities: <TEntity, TId extends string | number = string | number>(
+    collection: EntityCollection<TEntity, TId> | null | undefined,
+    entities: readonly TEntity[],
+    selectId: EntityIdSelector<TEntity, TId>
+  ) => EntityCollection<TEntity, TId>;
+  /** Remove entity ids from a normalized collection. */
+  removeEntities: <TEntity, TId extends string | number = string | number>(
+    collection: EntityCollection<TEntity, TId>,
+    ids: readonly TId[]
+  ) => EntityCollection<TEntity, TId>;
+  /** Convert a normalized collection back to an array. */
+  denormalizeEntities: <TEntity, TId extends string | number = string | number>(
+    collection: EntityCollection<TEntity, TId>
+  ) => TEntity[];
   /** Register a cached computed value. */
   computed: <TValue>(name: string, definition: ComputedDefinition<TState, TValue>, options?: MeshRegistryOptions) => void;
   /** Read a computed value, recomputing it only when dependencies changed. */
@@ -539,12 +1656,84 @@ export type Mesh<TState = unknown> = {
   snapshot: (label?: string) => Snapshot<TState>;
   /** Restore a snapshot by ID. */
   restore: (snapshotId: string) => void;
+  /** Run multiple state mutations atomically. State updates inside the callback
+   *  are batched into a single notification flush and a single `state.changed` event.
+   *  Returns the return value of the callback.
+   *
+   * @example
+   * ```ts
+   * mesh.batch(() => {
+   *   mesh.setPath("cart.items", []);
+   *   mesh.setPath("order.status", "completed");
+   * });
+   * ``` */
+  batch: <T>(fn: () => T) => T;
   /** Register middleware for events. */
   middleware: (handler: MeshMiddleware<TState>) => Unsubscribe;
+  /** Register a guard that can block actions, transactions, or mutations before they run. */
+  guard: {
+    (handler: MeshGuard<TState>): Unsubscribe;
+    (target: MeshGuardTarget, handler: MeshGuard<TState>): Unsubscribe;
+  };
   /** Register a plugin. Duplicate plugin names throw. */
   use: (plugin: MeshPlugin<TState>) => Unsubscribe;
   /** Subscribe to all StateMesh events. */
   onEvent: (listener: (event: MeshEvent) => MaybePromise<void>) => Unsubscribe;
+  /** Subscribe to events matching a filter pattern. Supports wildcards for event type and operation name. */
+  on: (filter: MeshEventFilter, listener: (event: MeshEvent) => MaybePromise<void>) => Unsubscribe;
+  /** Check if any resource is currently fetching. Pass names/tags to filter. */
+  isFetching: (filter?: { names?: readonly string[]; tags?: readonly ResourceTag[] }) => number;
+  /** Cancel an in-flight resource fetch by name and params. */
+  cancelResource: (name: string, params?: unknown) => void;
   /** Emit an event to middleware/plugin listeners. */
   emit: (event: MeshEvent) => void;
+
+  // --- Undo/Redo ---
+
+  /** Restore the previous state. No-op when the undo stack is empty. */
+  undo: () => void;
+  /** Restore the next state (undone by `undo`). No-op when the redo stack is empty. */
+  redo: () => void;
+  /** True when the undo stack has at least one entry. */
+  readonly canUndo: boolean;
+  /** True when the redo stack has at least one entry. */
+  readonly canRedo: boolean;
+  /** Current number of entries in the undo stack. */
+  readonly undoStackSize: number;
+  /** Current number of entries in the redo stack. */
+  readonly redoStackSize: number;
+  /** Clear both undo and redo stacks. */
+  clearUndoHistory: () => void;
+
+  // --- Time Travel ---
+
+  /** Start recording state changes for time travel. */
+  enableTimeTravel: () => void;
+  /** Stop recording state changes. Existing log is preserved. */
+  disableTimeTravel: () => void;
+  /** True when time travel recording is active. */
+  readonly isTimeTravelEnabled: boolean;
+  /** Return a copy of the time travel log. */
+  getTimeTravelLog: () => TimeTravelEntry<TState>[];
+  /** Restore the state that was recorded at the given log index. */
+  replayTo: (index: number) => void;
+  /** Restore the state recorded nearest to the given timestamp. */
+  replayToTimestamp: (timestamp: number) => void;
+  /** Clear the time travel log and free memory. */
+  clearTimeTravelLog: () => void;
+
+  // --- Middleware Pipelines ---
+
+  /** Register a named middleware pipeline. Pipelines use an Express-style `next()` pattern. */
+  pipeline: (name: string, stages: PipelineStage<TState>[], options?: PipelineOptions) => Unsubscribe;
+  /** Remove a previously registered pipeline. Returns true if the pipeline existed. */
+  removePipeline: (name: string) => boolean;
+};
+
+/** Filter for subscribing to specific events via `mesh.on`. */
+export type MeshEventFilter = {
+  /** Match event type exactly or with a RegExp (e.g. `"action.*"` or `/^action\./`). */
+  type?: string | RegExp;
+  /** Match event name field exactly or with a RegExp. */
+  name?: string | RegExp;
 };

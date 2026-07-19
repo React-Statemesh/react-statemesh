@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import type { MeshAction } from "../core/types";
+import { useMeshComponentUsage } from "./componentTracking";
 import { useMesh } from "./useMesh";
 
 /**
@@ -16,5 +17,6 @@ export function useMeshAction<TPayload = void, TResult = void, TState = unknown>
 ): (payload: TPayload) => TResult {
   const mesh = useMesh<TState>();
   const actionName = typeof nameOrAction === "string" ? nameOrAction : nameOrAction.actionName;
+  useMeshComponentUsage({ kind: "action", name: actionName });
   return useCallback((payload: TPayload) => mesh.runAction<TPayload, TResult>(actionName, payload), [mesh, actionName]);
 }

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import type { FormApi } from "../core/types";
+import { useMeshComponentUsage } from "./componentTracking";
 import { useMesh } from "./useMesh";
 
 /**
@@ -22,6 +23,7 @@ export function useMeshForm<TValues extends Record<string, unknown> = Record<str
   name: string
 ): FormApi<TValues> {
   const mesh = useMesh<TState>();
+  useMeshComponentUsage({ kind: "form", name });
   const versionRef = useRef(0);
 
   const subscribe = useCallback(

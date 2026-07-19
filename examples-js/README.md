@@ -31,9 +31,13 @@ Included examples:
 
 - `basic-counter`
 - `ecommerce-cart`
+- `resource-cache`
 - `checkout-transaction`
 - `url-filters`
 - `persisted-cart`
 - `tab-sync`
 - `form-submit`
+- `realworld-support-desk`
 - `nextjs-app`
+
+Use `realworld-support-desk` when you want the broadest JavaScript reference. It combines API data, cache state, mutation submit, forms, autosave, persistence, and devtools in one realistic app.

@@ -18,7 +18,12 @@
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vitest/globals"],
+    "baseUrl": ".",
+    "paths": {
+      "react-statemesh": ["src/index.ts"],
+      "react-statemesh/*": ["src/*/index.ts"]
+    }
   },
   "include": ["src", "tests", "tsup.config.ts", "vitest.config.ts"],
   "exclude": ["dist", "node_modules"]
