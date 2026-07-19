@@ -30,3 +30,9 @@ export { createBrowserHistory, createMemoryHistory } from "./historyAdapter";
 export type { HistoryAdapter, HistoryLocation, HistoryEntry } from "./historyAdapter";
 export { updateDocumentMeta } from "./meta";
 export type { RouteMeta } from "./meta";
+
+// React router components — import from "react-statemesh/router"
+export { RouterProvider, useRouter, type RouterProviderProps } from "../react/RouterProvider";
+export { Outlet } from "../react/Outlet";
+export { Link, type LinkProps } from "../react/Link";
+export { SharedElement, type SharedElementProps } from "../react/SharedElement";

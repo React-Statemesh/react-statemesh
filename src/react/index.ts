@@ -13,11 +13,6 @@ export * from "./useMeshResource";
 export * from "./useSuspenseMeshResource";
 export * from "./useMeshMutation";
 export * from "./useMeshBatch";
-export * from "./RouterProvider";
-export * from "./Outlet";
-export * from "./Link";
-export * from "./useRouter";
-export * from "./SharedElement";
 export {
   MeshErrorBoundary,
   MeshErrorResetBoundary,

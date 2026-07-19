@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createMesh, createMemoryHistory, defineRoutes, redirect } from "../../src";
+import { createMesh } from "../../src";
+import { createMemoryHistory, defineRoutes, redirect } from "../../src/router";
 
 // ---------------------------------------------------------------------------
 // Form API (useMeshForm equivalent)
