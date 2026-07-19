@@ -21,8 +21,8 @@
     "types": ["node", "vitest/globals"],
     "baseUrl": ".",
     "paths": {
-      "react-statemesh": ["src/index.ts"],
-      "react-statemesh/*": ["src/*/index.ts"]
+      "@statemesh/react": ["src/index.ts"],
+      "@statemesh/react/*": ["src/*/index.ts"]
     }
   },
   "include": ["src", "tests", "tsup.config.ts", "vitest.config.ts"],

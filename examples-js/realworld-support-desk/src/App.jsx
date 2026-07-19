@@ -7,8 +7,8 @@ import {
   useMeshMutation,
   useMeshResource,
   zodSchema
-} from "react-statemesh";
-import { StateMeshDevtools } from "react-statemesh/devtools";
+} from "@statemesh/react";
+import { StateMeshDevtools } from "@statemesh/react/devtools";
 
 const defaultFilters = { search: "", status: "open", priority: "all" };
 const tickets = [

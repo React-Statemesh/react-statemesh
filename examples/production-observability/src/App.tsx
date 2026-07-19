@@ -9,8 +9,8 @@ import {
   useMeshSelector,
   useMeshState,
   useSuspenseMeshResource
-} from "react-statemesh";
-import { StateMeshDevtools } from "react-statemesh/devtools";
+} from "@statemesh/react";
+import { StateMeshDevtools } from "@statemesh/react/devtools";
 
 type User = {
   id: string;

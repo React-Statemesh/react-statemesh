@@ -1,4 +1,4 @@
-import { StateMeshProvider, createMesh, useMeshForm, useMeshSelector } from "react-statemesh";
+import { StateMeshProvider, createMesh, useMeshForm, useMeshSelector } from "@statemesh/react";
 
 type ProfileValues = {
   name: string;

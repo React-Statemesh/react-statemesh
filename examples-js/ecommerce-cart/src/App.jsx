@@ -1,4 +1,4 @@
-import { StateMeshProvider, createMesh, tabSyncPlugin, useMeshAction, useMeshComputed } from "react-statemesh";
+import { StateMeshProvider, createMesh, tabSyncPlugin, useMeshAction, useMeshComputed } from "@statemesh/react";
 
 const mesh = createMesh({
   name: "ecommerce-cart-js",

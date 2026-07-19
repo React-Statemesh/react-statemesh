@@ -6,8 +6,8 @@ import {
   type EntityCollection,
   type ResourceSnapshot,
   type StorageAdapter
-} from "react-statemesh";
-import { loggerPlugin } from "react-statemesh/devtools";
+} from "@statemesh/react";
+import { loggerPlugin } from "@statemesh/react/devtools";
 
 export type TicketStatus = "open" | "pending" | "closed";
 export type TicketPriority = "low" | "medium" | "high";

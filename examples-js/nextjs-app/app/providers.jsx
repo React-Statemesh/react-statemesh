@@ -1,6 +1,6 @@
 "use client";
 
-import { StateMeshProvider, createMesh } from "react-statemesh";
+import { StateMeshProvider, createMesh } from "@statemesh/react";
 
 const mesh = createMesh({
   name: "nextjs-app-js",

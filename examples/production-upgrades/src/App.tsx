@@ -6,7 +6,7 @@ import {
   useMeshForm,
   useMeshResource,
   useMeshUrlState
-} from "react-statemesh";
+} from "@statemesh/react";
 
 type Product = {
   id: string;

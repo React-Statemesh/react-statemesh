@@ -1,4 +1,4 @@
-import { StateMeshProvider, createMesh, useMeshTransaction } from "react-statemesh";
+import { StateMeshProvider, createMesh, useMeshTransaction } from "@statemesh/react";
 
 const mesh = createMesh({
   name: "checkout-transaction",

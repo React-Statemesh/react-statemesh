@@ -6,8 +6,8 @@ import {
   useMeshResource,
   useMeshSelector,
   useMeshUrlState
-} from "react-statemesh";
-import { StateMeshDevtools } from "react-statemesh/devtools";
+} from "@statemesh/react";
+import { StateMeshDevtools } from "@statemesh/react/devtools";
 import {
   createSupportDeskExample,
   createTicketFormName,

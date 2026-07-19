@@ -5,7 +5,7 @@ These examples mirror the TypeScript examples in `examples/`, but use plain Reac
 StateMesh is TypeScript-first, not TypeScript-only. JavaScript users can import and use the same runtime APIs:
 
 ```jsx
-import { StateMeshProvider, createMesh, useMeshState } from "react-statemesh";
+import { StateMeshProvider, createMesh, useMeshState } from "@statemesh/react";
 
 const mesh = createMesh({
   state: {
