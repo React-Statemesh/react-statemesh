@@ -1,6 +1,6 @@
 {
   "name": "statemesh-core",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A TypeScript-first, transaction-first state orchestration library for React. Actions, computed state, async transactions, optimistic UI, rollback, persistence, URL state, forms, cross-tab sync, undo/redo, time travel, middleware pipelines, router, and testing helpers.",
   "type": "module",
   "sideEffects": false,
